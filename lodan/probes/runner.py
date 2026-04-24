@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from lodan.probes.base import Probe
-from lodan.probes.dispatch import pick_probe
+from lodan.probes.dispatch import pick_probes
 from lodan.store import writer
 from lodan.store.writer import ScanHandle
 
@@ -39,12 +39,15 @@ async def run_probes(
     sem_per_host: dict[str, asyncio.Semaphore] = defaultdict(
         lambda: asyncio.Semaphore(budget.per_host_concurrency)
     )
-    tasks = [
-        asyncio.create_task(
-            _run_one(conn, handle, ip, port, proto, sem_global, sem_per_host, budget)
-        )
-        for (ip, port, proto) in tuples
-    ]
+    tasks: list[asyncio.Task[bool]] = []
+    for ip, port, proto in tuples:
+        probes = pick_probes(port, proto)
+        for probe in probes:
+            tasks.append(
+                asyncio.create_task(
+                    _run_one(conn, handle, probe, ip, port, proto, sem_global, sem_per_host, budget)
+                )
+            )
     if not tasks:
         return 0
     results = await asyncio.gather(*tasks, return_exceptions=False)
@@ -54,6 +57,7 @@ async def run_probes(
 async def _run_one(
     conn: sqlite3.Connection,
     handle: ScanHandle,
+    probe: Probe,
     ip: str,
     port: int,
     proto: str,
@@ -61,10 +65,6 @@ async def _run_one(
     sem_per_host: dict[str, asyncio.Semaphore],
     budget: ProbeBudget,
 ) -> bool:
-    probe: Probe | None = pick_probe(port, proto)
-    if probe is None:
-        return False
-
     attempts = budget.retries + 1
     last_err: Exception | None = None
     for _ in range(attempts):

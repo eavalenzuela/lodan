@@ -24,17 +24,25 @@ def clear_registry() -> None:
 
 
 def register_defaults() -> None:
+    from lodan.probes.http import HTTPProbe
     from lodan.probes.tls import TLSProbe
 
     clear_registry()
     register("tls", TLSProbe)
+    register("http", HTTPProbe)
 
 
-def pick_probe(port: int, proto: str = "tcp") -> Probe | None:
+def pick_probes(port: int, proto: str = "tcp") -> list[Probe]:
+    """Every probe whose default_ports covers (port, proto).
+
+    HTTPS ports match both TLS and HTTP probes; both results merge into the
+    services row via COALESCE so neither clobbers the other.
+    """
     if proto != "tcp":
-        return None
+        return []
+    picks: list[Probe] = []
     for _name, cls in _REGISTRY:
         probe = cls()  # type: ignore[call-arg]
         if port in probe.default_ports:
-            return probe
-    return None
+            picks.append(probe)
+    return picks
