@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% set page_title = "diff " ~ from_scan_id ~ " → " ~ to_scan_id %}
+{% block content %}
+<h1>Diff #{{ from_scan_id }} → #{{ to_scan_id }}</h1>
+<p class="muted">
+  <a href="/services?scan={{ from_scan_id }}">services @{{ from_scan_id }}</a> ·
+  <a href="/services?scan={{ to_scan_id }}">services @{{ to_scan_id }}</a>
+</p>
+{% if not findings %}
+  <p class="muted">No findings — the two scans are identical.</p>
+{% endif %}
+{% for kind, rows in findings.items() %}
+  <section class="diff-kind">
+    <h2>{{ kind }} <span class="muted">({{ rows | length }})</span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ip</th>
+          <th>port</th>
+          <th>detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            <td><a href="/host/{{ r.ip }}?scan={{ to_scan_id }}">{{ r.ip }}</a></td>
+            <td>{{ r.port if r.port is not none else "" }}</td>
+            <td class="banner">
+              {% set d = r.detail %}
+              {% if kind == "new_service" or kind == "gone_service" %}
+                <code>{{ d.proto }}</code> {{ d.service or "" }} {{ d.banner or "" }}
+              {% elif kind == "changed" %}
+                {% if d.banner.from != d.banner.to %}
+                  banner: <del>{{ d.banner.from or "∅" }}</del> →
+                  <ins>{{ d.banner.to or "∅" }}</ins><br>
+                {% endif %}
+                {% if d.cert_fingerprint.from != d.cert_fingerprint.to %}
+                  cert: <del>{{ d.cert_fingerprint.from | short_fp or "∅" }}</del> →
+                  <ins>{{ d.cert_fingerprint.to | short_fp or "∅" }}</ins><br>
+                {% endif %}
+                {% if d.tech.from != d.tech.to %}
+                  tech: <del>{{ d.tech.from or "∅" }}</del> →
+                  <ins>{{ d.tech.to or "∅" }}</ins>
+                {% endif %}
+              {% elif kind == "new_cert" %}
+                <a href="/pivot/cert/{{ d.cert_fingerprint }}">{{ d.cert_fingerprint | short_fp }}</a>
+              {% elif kind == "new_host" %}
+                new IP in workspace
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endfor %}
+{% endblock %}

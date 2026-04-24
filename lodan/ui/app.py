@@ -139,6 +139,34 @@ def create_app(workspace: str) -> FastAPI:
             },
         )
 
+    @app.get("/diffs", response_class=HTMLResponse)
+    def diffs_timeline(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        pairs = _diff_pairs(db)
+        return templates.TemplateResponse(
+            request, "diffs.html", {"workspace": workspace, "pairs": pairs}
+        )
+
+    @app.get("/diff/{from_scan_id}/{to_scan_id}", response_class=HTMLResponse)
+    def diff_detail(
+        request: Request,
+        from_scan_id: int,
+        to_scan_id: int,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        findings = _diff_findings(db, from_scan_id, to_scan_id)
+        return templates.TemplateResponse(
+            request, "diff_detail.html",
+            {
+                "workspace": workspace,
+                "from_scan_id": from_scan_id,
+                "to_scan_id": to_scan_id,
+                "findings": findings,
+            },
+        )
+
     @app.get("/pivot/cert/{fp}", response_class=HTMLResponse)
     def pivot_cert(
         request: Request,
@@ -363,6 +391,49 @@ def _vulns_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[dict]
             (scan_id, ip),
         )
     ]
+
+
+def _diff_pairs(db: sqlite3.Connection) -> list[dict]:
+    rows = db.execute(
+        """
+        SELECT from_scan_id, to_scan_id, kind, COUNT(*)
+        FROM scan_diffs
+        GROUP BY from_scan_id, to_scan_id, kind
+        """
+    ).fetchall()
+    pairs: dict[tuple[int, int], dict] = {}
+    for f, t, kind, count in rows:
+        entry = pairs.setdefault(
+            (f, t),
+            {
+                "from_scan_id": f, "to_scan_id": t,
+                "counts": {"new_service": 0, "gone_service": 0, "changed": 0,
+                           "new_cert": 0, "new_host": 0, "total": 0},
+            },
+        )
+        entry["counts"][kind] = count
+        entry["counts"]["total"] += count
+    return sorted(pairs.values(), key=lambda p: p["to_scan_id"], reverse=True)
+
+
+def _diff_findings(
+    db: sqlite3.Connection, from_scan_id: int, to_scan_id: int
+) -> dict[str, list[dict]]:
+    rows = db.execute(
+        "SELECT kind, ip, port, detail FROM scan_diffs "
+        "WHERE from_scan_id = ? AND to_scan_id = ? ORDER BY kind, ip, port",
+        (from_scan_id, to_scan_id),
+    ).fetchall()
+    findings: dict[str, list[dict]] = {}
+    for kind, ip, port, detail in rows:
+        try:
+            parsed = json.loads(detail) if detail else {}
+        except Exception:
+            parsed = {}
+        findings.setdefault(kind, []).append(
+            {"ip": ip, "port": port, "detail": parsed}
+        )
+    return findings
 
 
 def _pivot_exact(db: sqlite3.Connection, column: str, value) -> list[dict]:

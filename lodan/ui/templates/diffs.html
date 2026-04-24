@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% set page_title = "diffs" %}
+{% block content %}
+<h1>Diff timeline</h1>
+{% if pairs %}
+<table>
+  <thead><tr><th>from</th><th>→</th><th>to</th><th>new</th><th>gone</th><th>changed</th><th>new cert</th><th>new host</th><th>total</th></tr></thead>
+  <tbody>
+    {% for p in pairs %}
+      <tr>
+        <td><a href="/services?scan={{ p.from_scan_id }}">#{{ p.from_scan_id }}</a></td>
+        <td class="muted">→</td>
+        <td><a href="/services?scan={{ p.to_scan_id }}">#{{ p.to_scan_id }}</a></td>
+        <td>{{ p.counts.new_service }}</td>
+        <td>{{ p.counts.gone_service }}</td>
+        <td>{{ p.counts.changed }}</td>
+        <td>{{ p.counts.new_cert }}</td>
+        <td>{{ p.counts.new_host }}</td>
+        <td><a href="/diff/{{ p.from_scan_id }}/{{ p.to_scan_id }}">{{ p.counts.total }} →</a></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No diffs yet. The first diff lands on the second scan.</p>
+{% endif %}
+{% endblock %}
