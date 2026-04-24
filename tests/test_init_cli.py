@@ -48,7 +48,7 @@ def test_init_rejects_bad_cidr(lodan_home: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_scan_not_implemented(lodan_home: Path) -> None:
+def test_update_not_implemented(lodan_home: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["scan", "whatever"])
+    result = runner.invoke(app, ["update"])
     assert result.exit_code == 2

@@ -14,8 +14,11 @@ import typer
 from rich.console import Console
 
 from lodan import __version__
+from lodan.authz import AuthorizationError
 from lodan.config import default_config_toml
+from lodan.discovery.dispatch import NoBackendAvailable
 from lodan.paths import workspace_config, workspace_db, workspace_dir
+from lodan.scan import run_scan_sync
 from lodan.store.db import bootstrap
 
 app = typer.Typer(
@@ -100,9 +103,26 @@ def update_cmd() -> None:
 
 
 @app.command("scan")
-def scan_cmd(workspace: str) -> None:
+def scan_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+) -> None:
     """Run a scan for the given workspace."""
-    _not_implemented("scan")
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace} (try `lodan init`)")
+        raise typer.Exit(1)
+    try:
+        summary = run_scan_sync(workspace)
+    except AuthorizationError as e:
+        err.print(f"[red]authorization:[/] {e}")
+        raise typer.Exit(1) from None
+    except NoBackendAvailable as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(1) from None
+    console.print(
+        f"[green]scan {summary.scan_id} complete[/]: "
+        f"{summary.services_discovered} services, "
+        f"{summary.authz_rejections} authz-rejected"
+    )
 
 
 @app.command("diff")

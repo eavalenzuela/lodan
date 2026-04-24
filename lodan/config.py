@@ -9,8 +9,6 @@ from __future__ import annotations
 import tomllib
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -29,9 +27,11 @@ class WorkspaceBlock(BaseModel):
 
 
 class ScanBlock(BaseModel):
-    backend: Literal["masscan", "naabu", "scapy"] = "masscan"
+    # Backend membership is validated at scan time against the registry, not
+    # at config load, so adding a backend does not require touching the model.
+    backend: str = "auto"
     rate_pps: int = 1000
-    ports: str = "top-1000"
+    ports: str = "top-100"
     tcp: bool = True
     udp: bool = True
     concurrency: int = 100
@@ -82,9 +82,9 @@ cloud_provider_allowed = false
 cloud_provider_justification = ""
 
 [scan]
-backend = "masscan"
+backend = "auto"                      # "auto" | "masscan" | "naabu" | "scapy"
 rate_pps = 1000
-ports = "top-1000"
+ports = "top-100"
 tcp = true
 udp = true
 concurrency = 100
