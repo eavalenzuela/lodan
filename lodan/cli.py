@@ -97,9 +97,36 @@ def init_cmd(
 
 
 @app.command("update")
-def update_cmd() -> None:
+def update_cmd(
+    cves: Annotated[bool, typer.Option("--cves", help="Refresh the NVD 2.0 CVE snapshot.")] = False,
+    max_pages: Annotated[
+        int | None,
+        typer.Option("--max-pages", help="Cap pages for a quick refresh."),
+    ] = None,
+) -> None:
     """Refresh NVD + IP2Location snapshots under ~/.lodan/data/."""
-    _not_implemented("update")
+    if not cves:
+        err.print("[yellow]nothing to do[/]: pass --cves (IP2Location lands in M4b)")
+        raise typer.Exit(1)
+
+    import asyncio
+
+    from lodan.enrich.cve_data import UpdateStats, bootstrap_dirs, connect, update
+
+    bootstrap_dirs()
+    conn = connect()
+
+    def _tick(s: UpdateStats) -> None:
+        console.print(
+            f"  page {s.pages}: {s.cves_seen} CVEs, {s.rows_upserted} rows upserted"
+        )
+
+    stats = asyncio.run(update(conn, max_pages=max_pages, progress=_tick))
+    console.print(
+        f"[green]NVD update complete[/]: "
+        f"{stats.pages} pages, {stats.cves_seen} CVEs, "
+        f"{stats.rows_upserted} rows upserted"
+    )
 
 
 @app.command("scan")

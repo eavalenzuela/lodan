@@ -68,16 +68,6 @@ CREATE TABLE IF NOT EXISTS scan_errors (
   ts TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS cve_cpe (
-  cpe TEXT NOT NULL,
-  cve TEXT NOT NULL,
-  cvss REAL,
-  published TEXT,
-  PRIMARY KEY (cpe, cve)
-);
-
-CREATE INDEX IF NOT EXISTS cve_cpe_prefix ON cve_cpe(substr(cpe, 1, 40));
-
 CREATE TABLE IF NOT EXISTS scan_diffs (
   from_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
   to_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,

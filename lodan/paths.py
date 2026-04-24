@@ -28,3 +28,15 @@ def workspace_db(name: str) -> Path:
 
 def workspace_config(name: str) -> Path:
     return workspace_dir(name) / "config.toml"
+
+
+def nvd_dir() -> Path:
+    return data_dir() / "nvd"
+
+
+def nvd_db() -> Path:
+    return nvd_dir() / "cve.db"
+
+
+def nvd_state() -> Path:
+    return nvd_dir() / "state.json"

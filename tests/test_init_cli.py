@@ -31,7 +31,7 @@ def test_init_creates_workspace(lodan_home: Path) -> None:
     conn = sqlite3.connect(wdir / "lodan.db")
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
-    for expected in ("scans", "hosts", "services", "vulns", "scan_errors", "cve_cpe", "scan_diffs"):
+    for expected in ("scans", "hosts", "services", "vulns", "scan_errors", "scan_diffs"):
         assert expected in tables
 
 
@@ -48,7 +48,7 @@ def test_init_rejects_bad_cidr(lodan_home: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_update_not_implemented(lodan_home: Path) -> None:
+def test_diff_not_implemented(lodan_home: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["update"])
+    result = runner.invoke(app, ["diff", "whatever"])
     assert result.exit_code == 2
