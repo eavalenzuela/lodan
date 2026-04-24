@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from ipaddress import ip_network
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -349,9 +350,58 @@ def _install_auth_token(fastapi_app, token: str) -> None:
 
 
 @app.command("export")
-def export_cmd(workspace: str) -> None:
-    """Export scan data as JSONL."""
-    _not_implemented("export")
+def export_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    scan: Annotated[
+        int | None,
+        typer.Option("--scan", help="Limit to one scan id (default: every scan)."),
+    ] = None,
+    fmt: Annotated[
+        str, typer.Option("--format", help="jsonl (default) or json."),
+    ] = "jsonl",
+    include: Annotated[
+        str,
+        typer.Option(
+            "--include",
+            help="Comma-separated tables. Default: scans,hosts,services,vulns.",
+        ),
+    ] = "scans,hosts,services,vulns",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Path to write. Default: stdout."),
+    ] = None,
+) -> None:
+    """Export workspace data as JSON Lines (or a JSON array)."""
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+    if fmt not in ("jsonl", "json"):
+        err.print(f"[red]unknown --format:[/] {fmt!r}")
+        raise typer.Exit(1)
+
+    tables = tuple(t.strip() for t in include.split(",") if t.strip())
+
+    from lodan.export import iter_rows, write_json_array, write_jsonl
+    from lodan.store.db import connect
+
+    conn = connect(workspace_db(workspace))
+    try:
+        records = list(iter_rows(conn, scan_id=scan, tables=tables))
+    finally:
+        conn.close()
+
+    sink = output.open("w", encoding="utf-8") if output else sys.stdout
+    try:
+        count = (
+            write_jsonl(records, sink) if fmt == "jsonl"
+            else write_json_array(records, sink)
+        )
+    finally:
+        if output:
+            sink.close()
+
+    if output:
+        console.print(f"[green]exported {count} row(s)[/] to {output}")
 
 
 @app.command("prune")
