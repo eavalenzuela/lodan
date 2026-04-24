@@ -14,6 +14,8 @@ from lodan.config import Config
 from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
 from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
+from lodan.enrich import cve as cve_enrich
+from lodan.enrich import cve_data
 from lodan.enrich.hosts import enrich_hosts
 from lodan.paths import workspace_config, workspace_db
 from lodan.probes import dispatch as probe_dispatch
@@ -29,6 +31,7 @@ class ScanSummary:
         self.authz_rejections = 0
         self.services_probed = 0
         self.hosts_enriched = 0
+        self.vulns_matched = 0
 
 
 async def run_scan(
@@ -104,6 +107,8 @@ async def run_scan(
                     do_rdns=cfg.enrich.rdns,
                     do_asn=cfg.enrich.asn,
                 )
+            if cfg.enrich.cve:
+                summary.vulns_matched = _run_cve_enrichment(conn, handle.scan_id)
             writer.finish_scan(conn, handle, status="completed")
         except Exception as e:
             writer.record_error(conn, handle, stage="discovery", error=repr(e))
@@ -112,6 +117,20 @@ async def run_scan(
         return summary
     finally:
         conn.close()
+
+
+def _run_cve_enrichment(workspace_conn, scan_id: int) -> int:
+    """Open the shared CVE DB if it exists; noop if the operator hasn't
+    run `lodan update --cves` yet."""
+    from lodan.paths import nvd_db
+
+    if not nvd_db().exists():
+        return 0
+    cve_conn = cve_data.connect()
+    try:
+        return cve_enrich.enrich_cves(workspace_conn, cve_conn, scan_id)
+    finally:
+        cve_conn.close()
 
 
 def run_scan_sync(

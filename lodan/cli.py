@@ -173,6 +173,7 @@ def scan_cmd(
         f"{summary.services_discovered} services, "
         f"{summary.services_probed} probed, "
         f"{summary.hosts_enriched} hosts enriched, "
+        f"{summary.vulns_matched} CVE matches, "
         f"{summary.authz_rejections} authz-rejected"
     )
 
