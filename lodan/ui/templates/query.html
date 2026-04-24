@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% set page_title = "query" %}
+{% block content %}
+<h1>Query</h1>
+<form class="filters" action="/query" method="get">
+  <input type="search" name="q" placeholder='port:443 AND sans:*.corp.example.com'
+         value="{{ q or '' }}" autofocus size="60">
+  <input type="submit" value="run">
+</form>
+<p class="muted">
+  DSL: <code>key:value</code> with <code>AND</code>, <code>OR</code>,
+  <code>NOT</code>. Keys: banner, tech, sans, port, service, ip,
+  favicon_mmh3, ja3, ja3s, cve. <code>*</code> = wildcard.
+</p>
+{% if error %}
+  <div class="card" style="border-color: var(--bad);">
+    <strong>query error:</strong> {{ error }}
+  </div>
+{% elif q %}
+  <p class="muted">{{ rows | length }} match(es){% if rows | length == limit %} (truncated){% endif %}</p>
+  <table>
+    <thead>
+      <tr><th>scan</th><th>ip</th><th>port</th><th>proto</th><th>service</th><th>banner</th><th>tech</th><th>cert</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr>
+          <td><a href="/services?scan={{ r.scan_id }}">#{{ r.scan_id }}</a></td>
+          <td><a href="/host/{{ r.ip }}?scan={{ r.scan_id }}">{{ r.ip }}</a></td>
+          <td>{{ r.port }}</td>
+          <td>{{ r.proto }}</td>
+          <td>{{ r.service or "" }}</td>
+          <td class="banner">{{ r.banner or "" }}</td>
+          <td>
+            {% set tech = r.tech | from_json %}
+            {% if tech %}{{ tech | join(", ") }}{% endif %}
+          </td>
+          <td>{% if r.cert_fingerprint %}<a href="/pivot/cert/{{ r.cert_fingerprint }}">{{ r.cert_fingerprint | short_fp }}</a>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">no matches</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

@@ -139,6 +139,29 @@ def create_app(workspace: str) -> FastAPI:
             },
         )
 
+    @app.get("/query", response_class=HTMLResponse)
+    def query_page(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        q: str | None = None,
+        scan: int | None = None,
+    ) -> HTMLResponse:
+        from lodan.store.query import QueryError, run_query
+
+        rows: list[dict] = []
+        error: str | None = None
+        limit = 200
+        if q:
+            try:
+                rows = run_query(db, q, scan_id=scan, limit=limit)
+            except QueryError as e:
+                error = str(e)
+        return templates.TemplateResponse(
+            request, "query.html",
+            {"workspace": workspace, "q": q, "rows": rows,
+             "error": error, "limit": limit},
+        )
+
     @app.get("/diffs", response_class=HTMLResponse)
     def diffs_timeline(
         request: Request,
