@@ -121,6 +121,7 @@ def scan_cmd(
     console.print(
         f"[green]scan {summary.scan_id} complete[/]: "
         f"{summary.services_discovered} services, "
+        f"{summary.services_probed} probed, "
         f"{summary.authz_rejections} authz-rejected"
     )
 

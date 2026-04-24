@@ -15,7 +15,16 @@ from lodan.cli import app
 from lodan.discovery.base import DiscoveryResult, DiscoverySpec
 from lodan.discovery.fake import FakeBackend
 from lodan.paths import workspace_db, workspace_dir
+from lodan.probes import dispatch as probe_dispatch
 from lodan.scan import run_scan_sync
+
+
+@pytest.fixture(autouse=True)
+def _no_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scan-pipeline tests exercise discovery; suppress the probe phase so
+    we don't try to open real sockets to 10.0.0.5."""
+    monkeypatch.setattr(probe_dispatch, "register_defaults", probe_dispatch.clear_registry)
+    probe_dispatch.clear_registry()
 
 
 @pytest.fixture
@@ -81,6 +90,7 @@ def test_scan_via_cli(workspace: str) -> None:
     result = runner.invoke(app, ["scan", workspace])
     assert result.exit_code == 0, result.output
     assert "1 services" in result.output
+    assert "0 probed" in result.output
 
 
 def test_scan_unknown_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

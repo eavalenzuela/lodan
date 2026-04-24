@@ -15,6 +15,8 @@ from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
 from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
 from lodan.paths import workspace_config, workspace_db
+from lodan.probes import dispatch as probe_dispatch
+from lodan.probes.runner import ProbeBudget, run_probes
 from lodan.store import writer
 from lodan.store.db import connect
 
@@ -24,9 +26,14 @@ class ScanSummary:
         self.scan_id = scan_id
         self.services_discovered = 0
         self.authz_rejections = 0
+        self.services_probed = 0
 
 
-async def run_scan(workspace: str, backend: DiscoveryBackend | None = None) -> ScanSummary:
+async def run_scan(
+    workspace: str,
+    backend: DiscoveryBackend | None = None,
+    probes: bool = True,
+) -> ScanSummary:
     """Run one scan cycle for `workspace`.
 
     `backend` lets tests inject a deterministic backend; in normal operation
@@ -78,6 +85,17 @@ async def run_scan(workspace: str, backend: DiscoveryBackend | None = None) -> S
                     conn, handle, result.ip, result.port, result.proto,
                 )
                 summary.services_discovered += 1
+            if probes:
+                probe_dispatch.register_defaults()
+                summary.services_probed = await run_probes(
+                    conn, handle,
+                    ProbeBudget(
+                        concurrency=cfg.scan.concurrency,
+                        per_host_concurrency=cfg.scan.per_host_concurrency,
+                        timeout_s=cfg.scan.probe_timeout_s,
+                        retries=cfg.scan.retries,
+                    ),
+                )
             writer.finish_scan(conn, handle, status="completed")
         except Exception as e:
             writer.record_error(conn, handle, stage="discovery", error=repr(e))
@@ -88,5 +106,9 @@ async def run_scan(workspace: str, backend: DiscoveryBackend | None = None) -> S
         conn.close()
 
 
-def run_scan_sync(workspace: str, backend: DiscoveryBackend | None = None) -> ScanSummary:
-    return asyncio.run(run_scan(workspace, backend=backend))
+def run_scan_sync(
+    workspace: str,
+    backend: DiscoveryBackend | None = None,
+    probes: bool = True,
+) -> ScanSummary:
+    return asyncio.run(run_scan(workspace, backend=backend, probes=probes))

@@ -74,6 +74,47 @@ def upsert_discovered_service(
     )
 
 
+def update_service_from_probe(
+    conn: sqlite3.Connection,
+    handle: ScanHandle,
+    ip: str,
+    port: int,
+    proto: str,
+    result: ProbeResult,  # noqa: F821 — forward ref to avoid cycle
+) -> None:
+    """Merge a ProbeResult into the services row discovery created."""
+    conn.execute(
+        """
+        UPDATE services
+        SET service = ?,
+            banner = COALESCE(?, banner),
+            cert_fingerprint = COALESCE(?, cert_fingerprint),
+            cert_sans = COALESCE(?, cert_sans),
+            ja3 = COALESCE(?, ja3),
+            ja3s = COALESCE(?, ja3s),
+            favicon_mmh3 = COALESCE(?, favicon_mmh3),
+            tech = COALESCE(?, tech),
+            raw = COALESCE(?, raw)
+        WHERE scan_id = ? AND ip = ? AND port = ? AND proto = ?
+        """,
+        (
+            result.service,
+            result.banner,
+            result.cert_fingerprint,
+            result.sans_json(),
+            result.ja3,
+            result.ja3s,
+            result.favicon_mmh3,
+            result.tech_json(),
+            result.raw_json() if result.raw else None,
+            handle.scan_id,
+            ip,
+            port,
+            proto,
+        ),
+    )
+
+
 def discovered_tuples(conn: sqlite3.Connection, handle: ScanHandle) -> set[tuple[str, int, str]]:
     return {
         (row[0], row[1], row[2])
