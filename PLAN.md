@@ -177,6 +177,184 @@ lodan serve <workspace> --addr :8080
 lodan export <workspace> --format jsonl
 ```
 
+## Implementation details
+
+### Tech stack
+
+- **Python 3.12**, packaged with `pyproject.toml`; plain `pip` + `requirements.txt` (+ `requirements-dev.txt`). No `uv` / `poetry`.
+- **CLI**: `typer` + `rich` (progress bars, tables).
+- **Config**: TOML via stdlib `tomllib`, validated with `pydantic`.
+- **Concurrency**: `asyncio` throughout. Blocking libs (scapy, impacket) wrapped in `asyncio.to_thread`.
+- **HTTP probe**: `httpx` (async, HTTP/1.1 + HTTP/2, custom SSL context so we still fingerprint bad certs).
+- **TLS probe**: raw `asyncio.open_connection` + `cryptography` for cert parsing. JA3/JA3S via `tlsfingerprint` (or hand-rolled — the algorithm is small).
+- **SSH probe**: `asyncssh` for banner + host keys + kex algorithms; never authenticates.
+- **SMB/RDP**: `impacket` (sync, threaded off).
+- **Favicon hash**: `mmh3` on the base64-encoded favicon bytes (Shodan-compatible).
+- **Tech detection**: two-layer. A hand-rolled minimal signature set in-repo (`enrich/tech_signatures.py`) is the primary source; a trimmed `enthec/webappanalyzer` fingerprint JSON is loaded on top for breadth. Matches from both are merged; self-rolled wins on conflict so we aren't hostage to upstream relicensing.
+- **Storage**: stdlib `sqlite3` in WAL mode, one DB per workspace. No ORM — write SQL by hand and keep it greppable.
+- **Search**: SQLite FTS5 (`services_fts`) mirroring banner/tech/cert_sans.
+- **GeoIP/ASN**: IP2Location LITE DB-ASN (free, CC-BY-SA) via the `IP2Location` Python package. No license key required; `lodan update` fetches the latest LITE bin. MaxMind deliberately avoided to keep the stack fully free/FOSS.
+- **CVE**: NVD 2.0 REST API during `lodan update`; shard into a `cve_cpe` table keyed by CPE vendor+product. Optional API key via `LODAN_NVD_KEY` for the higher rate limit. No legacy JSON 1.1 feed support.
+- **Web UI**: FastAPI + Jinja2 + HTMX + a hand-written stylesheet. No bundler, no npm.
+- **Logging**: `structlog`; JSON to `scan.log` in the workspace, pretty to stderr.
+
+### Workspace layout on disk
+
+```
+~/.lodan/
+  data/                         # shared, populated by `lodan update`
+    nvd/                        # CPE → [CVE, CVSS] index + raw feeds
+    ip2location/IP2LOCATION-LITE-ASN.BIN
+    favicons/seed.json          # curated hash → label map
+    wappalyzer/                 # fingerprint JSON
+  workspaces/<name>/
+    config.toml
+    lodan.db                    # all scans for this workspace
+    raw/<scan-id>/              # optional per-probe raw captures (opt-in)
+    scan.log
+```
+
+One DB per workspace (portability is a non-negotiable); sibling workspaces never share a DB. The `data/` dir is shared across workspaces. For the uvt ↔ lodan NVD share, lodan owns `~/.lodan/data/nvd/` by default and exposes it as the canonical path; uvt can symlink to it. If uvt prefers to own the snapshot, the inverse symlink is documented in README. (Exact uvt path TBD — tracked below.)
+
+### Config file (TOML)
+
+```toml
+[workspace]
+name = "home-lab"
+authorized_ranges = ["10.0.0.0/24", "192.168.1.0/24"]
+cloud_provider_allowed = false        # flip + set justification to scan public cloud space
+cloud_provider_justification = ""
+
+[scan]
+backend = "masscan"                   # "masscan" | "naabu" | "scapy"
+rate_pps = 1000                       # global cap
+ports = "top-1000"                    # "top-N" | "1-65535" | "22,80,443,..."  (operator-sized; no guard rails)
+tcp = true
+udp = true
+# ipv6 not supported in v1
+concurrency = 100                     # max in-flight probes scan-wide
+per_host_concurrency = 4              # max in-flight probes per IP
+probe_timeout_s = 5
+retries = 1
+
+[enrich]
+rdns = true
+asn = true
+geoip = true
+cve = true
+favicon = true
+tech = true
+keep_raw = false                      # write raw/<scan-id>/ captures
+
+[diff]
+# Defaults for `lodan diff`; overridable per invocation.
+default_from = "prev"                 # "prev" | scan-id | ISO date
+
+[retention]
+# User-configurable prune policy. Unset/omitted => keep everything.
+keep_last_n = 24                      # always retain the N most recent scans
+keep_monthly = 12                     # plus first-of-month scans for this many months
+# `lodan prune <workspace>` applies the policy; never runs automatically.
+```
+
+### Pipeline in detail
+
+1. **Load + validate config**. Assert every `authorized_ranges` CIDR parses; refuse the scan if any target lies outside. Emit a warning (not an error) if a range is in RFC6598/public space and `cloud_provider_allowed=false`; hard-fail if it's in a well-known cloud prefix.
+2. **Open scan row** in `scans` with `status='running'`. All subsequent writes carry this `scan_id`.
+3. **Port discovery**. Shell out to `masscan` by default (detect `CAP_NET_RAW`; fall back to `naabu`, then `scapy`). Runs TCP and, if `scan.udp=true`, a UDP sweep alongside (masscan `--ports U:...`, naabu `-sU`, scapy `sr1` with protocol-specific payloads for common UDP services — DNS/53, SNMP/161, NTP/123, NetBIOS/137, IKE/500, SSDP/1900, mDNS/5353). Stream stdout line-by-line into the `services` table with `service='unknown'`, `banner=NULL`, `proto` set. masscan's own `--rate` handles PPS; for scapy we implement a token-bucket.
+4. **Probe dispatch**. For each (ip, port) row, pick a probe by:
+   - explicit port→probe map (22→ssh, 80/8080/8000/8443→http, 443→tls+http, 3389→rdp, ...),
+   - else banner-sniff: 256-byte read on TCP connect; match against a small signature table; fall back to the "generic" probe that just records the banner.
+5. **Probe execution**. Bounded by global + per-host semaphores. Each probe is `async def run(ip, port) -> ProbeResult`. Results are upserted via `INSERT ... ON CONFLICT(scan_id, ip, port, proto) DO UPDATE`.
+6. **Enrichment**. Runs after probes finish (rDNS/ASN/GeoIP are per-host; CVE/favicon/tech are per-service). Separate table writes, same scan_id.
+7. **Diff against prior**. After a successful scan, compute the delta vs. the previous completed scan in this workspace and store it in `scan_diffs` (denormalized for the UI).
+8. **Close scan row**: `status='completed'`, `finished_at=now()`.
+
+Resume: if `lodan scan` is re-run while a scan row is `running`, skip (ip, port) tuples already recorded for that scan_id.
+
+### Schema additions
+
+```sql
+-- append to schema.sql
+
+CREATE TABLE scan_errors (
+  scan_id INTEGER,
+  ip TEXT,
+  port INTEGER,
+  stage TEXT,         -- discovery | probe:<name> | enrich:<name>
+  error TEXT,
+  ts TEXT
+);
+
+CREATE TABLE cve_cpe (
+  cpe TEXT,           -- cpe:2.3:a:apache:http_server:2.4.54
+  cve TEXT,
+  cvss REAL,
+  published TEXT,
+  PRIMARY KEY (cpe, cve)
+);
+CREATE INDEX cve_cpe_vendor_product ON cve_cpe(substr(cpe, 1, 40));
+
+CREATE TABLE scan_diffs (
+  from_scan_id INTEGER,
+  to_scan_id INTEGER,
+  kind TEXT,          -- new_service | gone_service | changed | new_cert | new_host
+  ip TEXT,
+  port INTEGER,
+  detail JSONB,
+  PRIMARY KEY (from_scan_id, to_scan_id, kind, ip, port)
+);
+
+ALTER TABLE scans ADD COLUMN status TEXT DEFAULT 'pending';
+ALTER TABLE scans ADD COLUMN cloud_justification TEXT;
+```
+
+### Query DSL
+
+Thin layer on top of SQL — not a full Lucene. Grammar:
+
+```
+query   := term (WS (AND|OR) WS term)*
+term    := NOT? key ':' value
+key     := banner | tech | sans | port | service | ip | favicon_mmh3 | ja3 | ja3s | cve
+value   := bareword | quoted | wildcard ('*' allowed)
+```
+
+Compiled to a parameterized SQL WHERE clause against `services` (+ FTS5 for `banner`/`tech`/`sans`). No arbitrary SQL from users.
+
+### Diff resolver (`--from`, `--to`)
+
+Accepts:
+- integer → treated as `scan_id`;
+- `prev` / `latest` → relative to the workspace's scans;
+- ISO date (`2026-04-17`) → latest completed scan on or before that date.
+
+### Rescan scheduling
+
+Out of scope inside lodan. Ship a sample `systemd` timer unit under `contrib/` and document it. `lodan scan` is idempotent-per-workspace and safe to run from cron.
+
+### Rate limiting & politeness
+
+- Global PPS cap (discovery): masscan's `--rate`, scapy's token bucket.
+- Probe phase: global concurrency semaphore + per-host semaphore (prevents hammering one box).
+- TCP connect timeout 3s, probe read timeout 5s, both overridable per-probe.
+- `retries=1` by default; second failure is recorded to `scan_errors` and dropped.
+
+### Testing
+
+- **Unit**: every probe parser has fixtures of captured raw responses under `tests/fixtures/<probe>/` and a `parse()`-only test path that never touches the network.
+- **Integration**: `tests/docker/` spins up nginx (TLS + plain), OpenSSH, vsftpd, Redis (no auth), Mongo (no auth) on loopback; scan `127.0.0.1` and assert the service table.
+- **Diff**: golden test — two hand-rolled SQLite snapshots → expected diff rows.
+- **Query DSL**: parse/compile snapshot tests.
+- **CI**: GitHub Actions, ubuntu-latest, no external network (NVD/MaxMind mocked).
+
+### Security / guard rails (implementation)
+
+- `authorized_ranges` checked at config load *and* right before each probe batch. Any target outside → hard fail + entry in `scan_errors`.
+- Cloud-prefix table shipped in-repo (AWS, GCP, Azure, OCI, DO public ranges). Overlap with `authorized_ranges` + `cloud_provider_allowed=false` → hard fail; `=true` requires `cloud_provider_justification` which is copied into `scans.cloud_justification`.
+- No probe ever sends credentials. HTTP probe sends only `GET /` and `GET /favicon.ico` with a `User-Agent: lodan/<version>`.
+- Web UI binds to `127.0.0.1` by default. `--addr 0.0.0.0` requires `--auth-token` (checked against `X-Lodan-Token` header); no token = refuse to bind non-loopback.
+
 ## Milestones
 
 1. **M1 — declare + discover**: workspace config, port sweep, store hosts/services.
@@ -188,12 +366,27 @@ lodan export <workspace> --format jsonl
 7. **M7 — more probes**: MQTT, Redis, Mongo, Docker/K8s API detection (unauth only).
 8. **M8 — FTS + query language**: lodan-query DSL for pivots.
 
-## Open questions
+## Decisions (resolved)
 
-- Scanning backend: shell out to masscan (fast, needs CAP_NET_RAW) or do it native in scapy (slower, pure Python)? Offer both, default to masscan if available.
-- Rescan cadence: cron-scheduled within lodan, or leave to systemd timers? Systemd.
-- Privacy: lodan is for ranges you own. Enforce via a strict CIDR allowlist in config. Warn loudly if the workspace declares a public range.
-- Sharing the NVD data with uvt: symlink or API? Symlink the snapshot dir, document.
+- **Scanning backend**: offer masscan / naabu / scapy; auto-pick best available, overridable in config. Default masscan.
+- **Rescan cadence**: systemd timers via `contrib/`; lodan stays stateless between runs.
+- **Privacy/authorization**: config `authorized_ranges` allowlist enforced at load *and* per batch; cloud-prefix hard-fail unless explicitly opted in with a justification string.
+- **Storage topology**: one SQLite per workspace (portability).
+- **Async model**: single asyncio event loop; blocking libs in `to_thread`.
+- **Web UI default**: localhost-only bind; non-loopback requires an auth token.
+- **Packaging**: plain `pip` + `pyproject.toml` + `requirements.txt` / `requirements-dev.txt`.
+- **Protocol scope v1**: TCP + UDP, IPv4 only. IPv6 deferred.
+- **Query surface v1**: mini-DSL (grammar above) from day one; compiles to parameterized SQL over `services` + FTS5.
+- **Favicon DB**: start empty; hashes accumulate in a `favicons` table from real scans. No seed shipped in v1.
+- **CVE source**: NVD 2.0 REST API only. Optional `LODAN_NVD_KEY` for higher rate limit.
+- **GeoIP/ASN**: IP2Location LITE DB-ASN (free, no key) — chosen over MaxMind GeoLite2 to keep the stack fully free/FOSS.
+- **Tech detection**: hand-rolled signatures are primary; `enthec/webappanalyzer` JSON loaded on top for breadth; self-rolled wins on conflict.
+- **Discovery sizing**: no cap — operator picks the port list, including `1-65535`, and owns the workspace size.
+- **Scan retention**: user-configurable via `[retention]` in config; `lodan prune` applies it manually. Never runs automatically. Default (section omitted) = keep everything.
+
+## Open questions (still need your call)
+
+1. **uvt NVD path**: `~/gits/uvt_universal_vuln_tracker/` is a sibling here, but the actual snapshot location inside uvt isn't pinned down. For now lodan owns `~/.lodan/data/nvd/` as the canonical path and uvt can symlink to it; we'll re-document once the uvt side is confirmed.
 
 ## Legal / ethics guard
 
