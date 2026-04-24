@@ -25,11 +25,13 @@ def clear_registry() -> None:
 
 def register_defaults() -> None:
     from lodan.probes.http import HTTPProbe
+    from lodan.probes.ssh import SSHProbe
     from lodan.probes.tls import TLSProbe
 
     clear_registry()
     register("tls", TLSProbe)
     register("http", HTTPProbe)
+    register("ssh", SSHProbe)
 
 
 def pick_probes(port: int, proto: str = "tcp") -> list[Probe]:
