@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lodan"
+version = "0.0.1"
+description = "Local Shodan. Offline reconnaissance for ranges you own, with diff-over-time."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "lodan contributors" }]
+dynamic = ["dependencies", "optional-dependencies"]
+
+[project.scripts]
+lodan = "lodan.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["lodan*"]
+
+[tool.setuptools.package-data]
+"lodan.store" = ["schema.sql"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+optional-dependencies.dev = { file = ["requirements-dev.txt"] }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
