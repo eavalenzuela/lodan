@@ -5,7 +5,7 @@
     <td>{{ s.proto }}</td>
     <td>{{ s.service or "" }}</td>
     <td class="banner">{{ s.banner or "" }}</td>
-    <td>{% if s.cert_fingerprint %}{{ s.cert_fingerprint | short_fp }}{% endif %}</td>
+    <td>{% if s.cert_fingerprint %}<a href="/pivot/cert/{{ s.cert_fingerprint }}" title="pivot on this cert">{{ s.cert_fingerprint | short_fp }}</a>{% endif %}</td>
     <td>
       {% set tech = s.tech | from_json %}
       {% if tech %}{{ tech | join(", ") }}{% endif %}

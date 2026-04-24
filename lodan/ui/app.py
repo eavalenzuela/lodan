@@ -139,6 +139,62 @@ def create_app(workspace: str) -> FastAPI:
             },
         )
 
+    @app.get("/pivot/cert/{fp}", response_class=HTMLResponse)
+    def pivot_cert(
+        request: Request,
+        fp: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        matches = _pivot_exact(db, "cert_fingerprint", fp)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "cert_fingerprint",
+             "needle": fp, "matches": matches},
+        )
+
+    @app.get("/pivot/favicon/{value}", response_class=HTMLResponse)
+    def pivot_favicon(
+        request: Request,
+        value: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        try:
+            hash_int = int(value)
+        except ValueError:
+            raise HTTPException(400, detail="favicon hash must be a signed int32") from None
+        matches = _pivot_exact(db, "favicon_mmh3", hash_int)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "favicon_mmh3",
+             "needle": str(hash_int), "matches": matches},
+        )
+
+    @app.get("/pivot/ja3s/{fp}", response_class=HTMLResponse)
+    def pivot_ja3s(
+        request: Request,
+        fp: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        matches = _pivot_exact(db, "ja3s", fp)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "ja3s",
+             "needle": fp, "matches": matches},
+        )
+
+    @app.get("/pivot/san", response_class=HTMLResponse)
+    def pivot_san(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        q: str | None = None,
+    ) -> HTMLResponse:
+        matches = _pivot_san(db, q) if q else []
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "san",
+             "needle": q, "matches": matches},
+        )
+
     @app.get("/healthz", response_class=HTMLResponse)
     def healthz() -> HTMLResponse:
         return HTMLResponse("ok")
@@ -307,6 +363,39 @@ def _vulns_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[dict]
             (scan_id, ip),
         )
     ]
+
+
+def _pivot_exact(db: sqlite3.Connection, column: str, value) -> list[dict]:
+    if column not in ("cert_fingerprint", "favicon_mmh3", "ja3s"):
+        raise ValueError(f"not a pivotable column: {column}")
+    rows = db.execute(
+        f"SELECT scan_id, ip, port, service, banner, {column} "
+        f"FROM services WHERE {column} = ? ORDER BY scan_id DESC, ip, port",
+        (value,),
+    ).fetchall()
+    return [_pivot_row(r) for r in rows]
+
+
+def _pivot_san(db: sqlite3.Connection, needle: str) -> list[dict]:
+    # cert_sans is stored as a JSON array string; substring LIKE against the
+    # raw text is enough for v1. Operator-supplied * maps to %, and we always
+    # wrap the pattern in % so a bare "*.corp" finds it as a substring of
+    # the JSON-encoded array.
+    needle_sql = "%" + needle.replace("*", "%") + "%"
+    rows = db.execute(
+        "SELECT scan_id, ip, port, service, banner, cert_sans "
+        "FROM services WHERE cert_sans IS NOT NULL AND cert_sans LIKE ? "
+        "ORDER BY scan_id DESC, ip, port",
+        (needle_sql,),
+    ).fetchall()
+    return [_pivot_row(r) for r in rows]
+
+
+def _pivot_row(r) -> dict:
+    return {
+        "scan_id": r[0], "ip": r[1], "port": r[2],
+        "service": r[3], "banner": r[4], "matched_value": str(r[5]) if r[5] is not None else "",
+    }
 
 
 def _short_fp(value: str | None, length: int = 12) -> str:

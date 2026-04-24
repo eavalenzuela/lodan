@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% set page_title = "pivot " + kind %}
+{% block content %}
+<h1>Pivot: {{ kind }}</h1>
+<p class="muted">Matching on <code>{{ needle }}</code> across every scan in this workspace.</p>
+{% if kind == "san" %}
+<form class="filters" action="/pivot/san" method="get">
+  <input type="search" name="q" placeholder="*.corp.example.com" value="{{ needle or '' }}" autofocus>
+</form>
+{% endif %}
+<table>
+  <thead>
+    <tr><th>scan</th><th>ip</th><th>port</th><th>service</th><th>banner</th><th>match</th></tr>
+  </thead>
+  <tbody>
+    {% for m in matches %}
+      <tr>
+        <td><a href="/services?scan={{ m.scan_id }}">#{{ m.scan_id }}</a></td>
+        <td><a href="/host/{{ m.ip }}?scan={{ m.scan_id }}">{{ m.ip }}</a></td>
+        <td>{{ m.port }}</td>
+        <td>{{ m.service or "" }}</td>
+        <td class="banner">{{ m.banner or "" }}</td>
+        <td class="muted">{{ m.matched_value | short_fp(24) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">no matches</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
