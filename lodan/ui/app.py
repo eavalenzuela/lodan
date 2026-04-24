@@ -57,6 +57,88 @@ def create_app(workspace: str) -> FastAPI:
             {"workspace": workspace, "summary": summary},
         )
 
+    @app.get("/hosts", response_class=HTMLResponse)
+    def hosts_page(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+        q: str | None = None,
+    ) -> HTMLResponse:
+        scan_id = scan or _latest_scan_id(db)
+        hosts = _hosts_rows(db, scan_id, q) if scan_id else []
+        return templates.TemplateResponse(
+            request, "hosts.html",
+            {"workspace": workspace, "hosts": hosts, "scan_id": scan_id, "q": q},
+        )
+
+    @app.get("/hosts/rows", response_class=HTMLResponse)
+    def hosts_rows_partial(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+        q: str | None = None,
+    ) -> HTMLResponse:
+        scan_id = scan or _latest_scan_id(db)
+        hosts = _hosts_rows(db, scan_id, q) if scan_id else []
+        return templates.TemplateResponse(
+            request, "_hosts_rows.html",
+            {"hosts": hosts, "scan_id": scan_id},
+        )
+
+    @app.get("/services", response_class=HTMLResponse)
+    def services_page(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+        q: str | None = None,
+    ) -> HTMLResponse:
+        scan_id = scan or _latest_scan_id(db)
+        services = _services_rows(db, scan_id, q) if scan_id else []
+        return templates.TemplateResponse(
+            request, "services.html",
+            {"workspace": workspace, "services": services, "scan_id": scan_id, "q": q},
+        )
+
+    @app.get("/services/rows", response_class=HTMLResponse)
+    def services_rows_partial(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+        q: str | None = None,
+    ) -> HTMLResponse:
+        scan_id = scan or _latest_scan_id(db)
+        services = _services_rows(db, scan_id, q) if scan_id else []
+        return templates.TemplateResponse(
+            request, "_services_rows.html",
+            {"services": services, "scan_id": scan_id},
+        )
+
+    @app.get("/host/{ip}", response_class=HTMLResponse)
+    def host_detail(
+        request: Request,
+        ip: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+    ) -> HTMLResponse:
+        scan_id = scan or _latest_scan_id(db)
+        if scan_id is None:
+            raise HTTPException(404, detail="no scans in this workspace")
+        host = _host_row(db, scan_id, ip)
+        if host is None:
+            raise HTTPException(404, detail=f"no host {ip} in scan {scan_id}")
+        services = _services_for_host(db, scan_id, ip)
+        vulns = _vulns_for_host(db, scan_id, ip)
+        return templates.TemplateResponse(
+            request, "host_detail.html",
+            {
+                "workspace": workspace,
+                "scan_id": scan_id,
+                "host": host,
+                "services": services,
+                "vulns": vulns,
+            },
+        )
+
     @app.get("/healthz", response_class=HTMLResponse)
     def healthz() -> HTMLResponse:
         return HTMLResponse("ok")
@@ -121,6 +203,110 @@ def _dashboard_summary(db: sqlite3.Connection) -> dict:
         "totals": totals,
         "last_diff": last_diff,
     }
+
+
+def _latest_scan_id(db: sqlite3.Connection) -> int | None:
+    row = db.execute(
+        "SELECT id FROM scans WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dict]:
+    """Every IP seen in this scan's services, left-joined with any hosts row
+    so enrichment-skipped scans still render."""
+    query = (
+        "SELECT s.ip, h.rdns, h.asn, h.asn_org, h.country, COUNT(*) AS svc_count "
+        "FROM services s "
+        "LEFT JOIN hosts h ON h.scan_id = s.scan_id AND h.ip = s.ip "
+        "WHERE s.scan_id = ?"
+    )
+    params: list = [scan_id]
+    if q:
+        query += (
+            " AND (s.ip LIKE ? OR COALESCE(h.rdns,'') LIKE ? "
+            "   OR COALESCE(h.asn_org,'') LIKE ?)"
+        )
+        like = f"%{q}%"
+        params.extend([like, like, like])
+    query += " GROUP BY s.ip, h.rdns, h.asn, h.asn_org, h.country ORDER BY s.ip"
+    rows = db.execute(query, params).fetchall()
+    return [
+        {
+            "ip": r[0], "rdns": r[1], "asn": r[2], "asn_org": r[3], "country": r[4],
+            "service_count": r[5],
+        }
+        for r in rows
+    ]
+
+
+def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dict]:
+    query = (
+        "SELECT ip, port, proto, service, banner, cert_fingerprint, tech "
+        "FROM services WHERE scan_id = ?"
+    )
+    params: list = [scan_id]
+    if q:
+        query += (
+            " AND (ip LIKE ? OR COALESCE(banner,'') LIKE ? "
+            "   OR COALESCE(cert_sans,'') LIKE ? OR COALESCE(tech,'') LIKE ?)"
+        )
+        like = f"%{q}%"
+        params.extend([like, like, like, like])
+    query += " ORDER BY ip, port"
+
+    return [
+        {
+            "ip": r[0], "port": r[1], "proto": r[2], "service": r[3],
+            "banner": r[4], "cert_fingerprint": r[5], "tech": r[6],
+        }
+        for r in db.execute(query, params).fetchall()
+    ]
+
+
+def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
+    row = db.execute(
+        "SELECT ip, rdns, asn, asn_org, country FROM hosts WHERE scan_id = ? AND ip = ?",
+        (scan_id, ip),
+    ).fetchone()
+    if row is not None:
+        return {
+            "ip": row[0], "rdns": row[1], "asn": row[2],
+            "asn_org": row[3], "country": row[4],
+        }
+    # Host might not have a row if enrichment was off; synthesize a minimal one
+    # as long as the IP shows up in services.
+    hit = db.execute(
+        "SELECT 1 FROM services WHERE scan_id = ? AND ip = ? LIMIT 1", (scan_id, ip)
+    ).fetchone()
+    if hit:
+        return {"ip": ip, "rdns": None, "asn": None, "asn_org": None, "country": None}
+    return None
+
+
+def _services_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[dict]:
+    return [
+        {
+            "port": r[0], "proto": r[1], "service": r[2], "banner": r[3],
+            "cert_fingerprint": r[4], "tech": r[5],
+        }
+        for r in db.execute(
+            "SELECT port, proto, service, banner, cert_fingerprint, tech "
+            "FROM services WHERE scan_id = ? AND ip = ? ORDER BY port",
+            (scan_id, ip),
+        )
+    ]
+
+
+def _vulns_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[dict]:
+    return [
+        {"port": r[0], "cve": r[1], "cpe": r[2], "confidence": r[3], "source": r[4]}
+        for r in db.execute(
+            "SELECT port, cve, cpe, confidence, source FROM vulns "
+            "WHERE scan_id = ? AND ip = ? ORDER BY port, cve",
+            (scan_id, ip),
+        )
+    ]
 
 
 def _short_fp(value: str | None, length: int = 12) -> str:

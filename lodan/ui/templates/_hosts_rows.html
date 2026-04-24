@@ -1,0 +1,12 @@
+{% for h in hosts %}
+  <tr>
+    <td><a href="/host/{{ h.ip }}?scan={{ scan_id }}">{{ h.ip }}</a></td>
+    <td>{{ h.rdns or "" }}</td>
+    <td>{{ h.asn or "" }}</td>
+    <td>{{ h.asn_org or "" }}</td>
+    <td>{{ h.country or "" }}</td>
+    <td class="muted">{{ h.service_count }} svc</td>
+  </tr>
+{% else %}
+  <tr><td colspan="6" class="muted">no hosts match</td></tr>
+{% endfor %}

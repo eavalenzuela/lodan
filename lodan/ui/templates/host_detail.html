@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% set page_title = host.ip %}
+{% block content %}
+<h1>{{ host.ip }}{% if host.rdns %} <small class="muted">({{ host.rdns }})</small>{% endif %}</h1>
+<div class="card">
+  <ul class="totals">
+    {% if host.asn %}<li><span class="label">ASN</span><span class="value">AS{{ host.asn }}</span></li>{% endif %}
+    {% if host.asn_org %}<li><span class="label">org</span><span class="value">{{ host.asn_org }}</span></li>{% endif %}
+    {% if host.country %}<li><span class="label">country</span><span class="value">{{ host.country }}</span></li>{% endif %}
+    <li><span class="label">scan</span><span class="value">#{{ scan_id }}</span></li>
+  </ul>
+</div>
+<h2>Services</h2>
+<table>
+  <thead><tr><th>port</th><th>proto</th><th>service</th><th>banner</th><th>cert</th><th>tech</th></tr></thead>
+  <tbody>
+    {% for s in services %}
+      <tr>
+        <td>{{ s.port }}</td>
+        <td>{{ s.proto }}</td>
+        <td>{{ s.service or "" }}</td>
+        <td class="banner">{{ s.banner or "" }}</td>
+        <td>{% if s.cert_fingerprint %}{{ s.cert_fingerprint | short_fp }}{% endif %}</td>
+        <td>
+          {% set tech = s.tech | from_json %}
+          {% if tech %}{{ tech | join(", ") }}{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if vulns %}
+<h2>CVE matches</h2>
+<table>
+  <thead><tr><th>port</th><th>CVE</th><th>CPE</th><th>source</th><th>confidence</th></tr></thead>
+  <tbody>
+    {% for v in vulns %}
+      <tr>
+        <td>{{ v.port }}</td>
+        <td>{{ v.cve }}</td>
+        <td class="muted">{{ v.cpe }}</td>
+        <td>{{ v.source }}</td>
+        <td>{{ "%.2f" | format(v.confidence) }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

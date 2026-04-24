@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% set page_title = "services" %}
+{% block content %}
+<h1>Services — scan #{{ scan_id }}</h1>
+<form class="filters" hx-get="/services/rows" hx-target="#rows" hx-trigger="keyup changed delay:200ms, change"
+      hx-include="[name='scan']">
+  <input type="hidden" name="scan" value="{{ scan_id }}">
+  <input type="search" name="q" placeholder="banner / tech / cert SAN / ip…" value="{{ q or '' }}" autofocus>
+</form>
+<table>
+  <thead><tr><th>ip</th><th>port</th><th>proto</th><th>service</th><th>banner</th><th>cert</th><th>tech</th></tr></thead>
+  <tbody id="rows">
+    {% include "_services_rows.html" %}
+  </tbody>
+</table>
+{% endblock %}

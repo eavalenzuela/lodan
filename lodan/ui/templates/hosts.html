@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% set page_title = "hosts" %}
+{% block content %}
+<h1>Hosts — scan #{{ scan_id }}</h1>
+<form class="filters" hx-get="/hosts/rows" hx-target="#rows" hx-trigger="keyup changed delay:200ms, change"
+      hx-include="[name='scan']">
+  <input type="hidden" name="scan" value="{{ scan_id }}">
+  <input type="search" name="q" placeholder="ip / rdns / asn org…" value="{{ q or '' }}" autofocus>
+</form>
+<table>
+  <thead><tr><th>ip</th><th>rdns</th><th>asn</th><th>asn org</th><th>country</th><th></th></tr></thead>
+  <tbody id="rows">
+    {% include "_hosts_rows.html" %}
+  </tbody>
+</table>
+{% endblock %}

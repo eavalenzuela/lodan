@@ -1,0 +1,16 @@
+{% for s in services %}
+  <tr>
+    <td><a href="/host/{{ s.ip }}?scan={{ scan_id }}">{{ s.ip }}</a></td>
+    <td>{{ s.port }}</td>
+    <td>{{ s.proto }}</td>
+    <td>{{ s.service or "" }}</td>
+    <td class="banner">{{ s.banner or "" }}</td>
+    <td>{% if s.cert_fingerprint %}{{ s.cert_fingerprint | short_fp }}{% endif %}</td>
+    <td>
+      {% set tech = s.tech | from_json %}
+      {% if tech %}{{ tech | join(", ") }}{% endif %}
+    </td>
+  </tr>
+{% else %}
+  <tr><td colspan="7" class="muted">no services match</td></tr>
+{% endfor %}
