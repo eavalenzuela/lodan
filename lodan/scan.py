@@ -14,6 +14,7 @@ from lodan.config import Config
 from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
 from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
+from lodan.enrich.hosts import enrich_hosts
 from lodan.paths import workspace_config, workspace_db
 from lodan.probes import dispatch as probe_dispatch
 from lodan.probes.runner import ProbeBudget, run_probes
@@ -27,6 +28,7 @@ class ScanSummary:
         self.services_discovered = 0
         self.authz_rejections = 0
         self.services_probed = 0
+        self.hosts_enriched = 0
 
 
 async def run_scan(
@@ -95,6 +97,12 @@ async def run_scan(
                         timeout_s=cfg.scan.probe_timeout_s,
                         retries=cfg.scan.retries,
                     ),
+                )
+            if cfg.enrich.rdns or cfg.enrich.asn:
+                summary.hosts_enriched = await enrich_hosts(
+                    conn, handle,
+                    do_rdns=cfg.enrich.rdns,
+                    do_asn=cfg.enrich.asn,
                 )
             writer.finish_scan(conn, handle, status="completed")
         except Exception as e:

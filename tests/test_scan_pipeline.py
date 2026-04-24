@@ -20,11 +20,17 @@ from lodan.scan import run_scan_sync
 
 
 @pytest.fixture(autouse=True)
-def _no_probes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scan-pipeline tests exercise discovery; suppress the probe phase so
-    we don't try to open real sockets to 10.0.0.5."""
+def _no_probes_no_enrich(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scan-pipeline tests exercise discovery; suppress the probe and
+    enrichment phases so we don't try to open real sockets or hit the
+    system resolver for 10.0.0.5."""
     monkeypatch.setattr(probe_dispatch, "register_defaults", probe_dispatch.clear_registry)
     probe_dispatch.clear_registry()
+
+    async def _noop_enrich(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr("lodan.scan.enrich_hosts", _noop_enrich)
 
 
 @pytest.fixture

@@ -40,3 +40,11 @@ def nvd_db() -> Path:
 
 def nvd_state() -> Path:
     return nvd_dir() / "state.json"
+
+
+def ip2location_dir() -> Path:
+    return data_dir() / "ip2location"
+
+
+def ip2location_asn_bin() -> Path:
+    return ip2location_dir() / "IP2LOCATION-LITE-ASN.BIN"
