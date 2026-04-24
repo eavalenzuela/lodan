@@ -9,6 +9,7 @@ from __future__ import annotations
 import tomllib
 from ipaddress import ip_network
 from pathlib import Path
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -67,7 +68,7 @@ class Config(BaseModel):
     retention: RetentionBlock = Field(default_factory=RetentionBlock)
 
     @classmethod
-    def load(cls, path: Path) -> "Config":
+    def load(cls, path: Path) -> Config:
         with path.open("rb") as f:
             return cls.model_validate(tomllib.load(f))
 
