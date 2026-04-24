@@ -12,7 +12,7 @@ from ipaddress import IPv4Network
 from lodan import authz
 from lodan.config import Config
 from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
-from lodan.discovery.dispatch import pick
+from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
 from lodan.paths import workspace_config, workspace_db
 from lodan.store import writer
@@ -46,6 +46,7 @@ async def run_scan(workspace: str, backend: DiscoveryBackend | None = None) -> S
     )
 
     if backend is None:
+        register_defaults()
         backend = pick(cfg.scan.backend)
 
     conn = connect(workspace_db(workspace))

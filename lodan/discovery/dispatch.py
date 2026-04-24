@@ -25,6 +25,13 @@ def get(name: str) -> DiscoveryBackend:
     return _REGISTRY[name]()  # type: ignore[call-arg]
 
 
+def register_defaults() -> None:
+    """Register the production backends. Safe to call multiple times."""
+    from lodan.discovery.masscan import MasscanBackend
+
+    register("masscan", MasscanBackend)
+
+
 def pick(requested: str) -> DiscoveryBackend:
     """Return a usable backend. `requested` may be 'auto' or a registered name."""
     if requested != "auto":
