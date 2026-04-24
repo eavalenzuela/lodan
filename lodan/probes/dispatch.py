@@ -25,6 +25,7 @@ def clear_registry() -> None:
 
 def register_defaults() -> None:
     from lodan.probes.http import HTTPProbe
+    from lodan.probes.mongo import MongoProbe
     from lodan.probes.mqtt import MQTTProbe
     from lodan.probes.rdp import RDPProbe
     from lodan.probes.redis import RedisProbe
@@ -40,6 +41,7 @@ def register_defaults() -> None:
     register("rdp", RDPProbe)
     register("mqtt", MQTTProbe)
     register("redis", RedisProbe)
+    register("mongo", MongoProbe)
 
 
 def pick_probes(port: int, proto: str = "tcp") -> list[Probe]:
