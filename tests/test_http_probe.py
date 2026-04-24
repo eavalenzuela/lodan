@@ -19,6 +19,7 @@ def _capture(
     body: bytes = b"",
     scheme: str = "http",
     favicon: bytes | None = None,
+    cookies: frozenset[str] = frozenset(),
 ) -> HTTPCapture:
     return HTTPCapture(
         status=status,
@@ -26,6 +27,7 @@ def _capture(
         body=body,
         scheme=scheme,
         favicon_bytes=favicon,
+        set_cookie_names=cookies,
     )
 
 

@@ -18,6 +18,7 @@ import httpx
 import mmh3
 
 from lodan import __version__
+from lodan.enrich import tech_signatures
 from lodan.probes.base import ProbeResult
 
 _USER_AGENT = f"lodan/{__version__}"
@@ -34,6 +35,7 @@ class HTTPCapture:
     body: bytes
     scheme: str
     favicon_bytes: bytes | None
+    set_cookie_names: frozenset[str] = frozenset()
 
 
 class HTTPProbe:
@@ -67,19 +69,33 @@ async def fetch(ip: str, port: int, timeout: float) -> HTTPCapture:
                 favicon_bytes = fav.content
         except httpx.HTTPError:
             favicon_bytes = None
+        set_cookies = _extract_set_cookie_names(response.headers.get_list("set-cookie"))
         return HTTPCapture(
             status=response.status_code,
             headers={k.lower(): v for k, v in response.headers.items()},
             body=response.content,
             scheme=scheme,
             favicon_bytes=favicon_bytes,
+            set_cookie_names=set_cookies,
         )
+
+
+def _extract_set_cookie_names(set_cookie_headers: list[str]) -> set[str]:
+    names: set[str] = set()
+    for raw in set_cookie_headers:
+        if "=" not in raw:
+            continue
+        names.add(raw.split("=", 1)[0].strip())
+    return names
 
 
 def parse_capture(capture: HTTPCapture) -> ProbeResult:
     title = _extract_title(capture.body)
     server = capture.headers.get("server")
     favicon_hash = shodan_mmh3(capture.favicon_bytes) if capture.favicon_bytes else None
+    tech = tech_signatures.match(
+        capture.headers, capture.body, set(capture.set_cookie_names)
+    )
     banner_parts: list[str] = [f"HTTP/{capture.status}"]
     if server:
         banner_parts.append(server)
@@ -96,6 +112,7 @@ def parse_capture(capture: HTTPCapture) -> ProbeResult:
         service="http",
         banner=" ".join(banner_parts),
         favicon_mmh3=favicon_hash,
+        tech=tech or None,
         raw=raw,
     )
 
