@@ -28,9 +28,11 @@ def get(name: str) -> DiscoveryBackend:
 def register_defaults() -> None:
     """Register the production backends. Safe to call multiple times."""
     from lodan.discovery.masscan import MasscanBackend
+    from lodan.discovery.naabu import NaabuBackend
     from lodan.discovery.scapy_backend import ScapyBackend
 
     register("masscan", MasscanBackend)
+    register("naabu", NaabuBackend)
     register("scapy", ScapyBackend)
 
 
