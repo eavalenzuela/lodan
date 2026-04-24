@@ -405,9 +405,47 @@ def export_cmd(
 
 
 @app.command("prune")
-def prune_cmd(workspace: str) -> None:
+def prune_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Preview the prune without deleting."),
+    ] = False,
+) -> None:
     """Apply the workspace's [retention] policy."""
-    _not_implemented("prune")
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    from lodan.config import Config
+    from lodan.retention import apply as retention_apply
+    from lodan.store.db import connect
+
+    cfg = Config.load(workspace_config(workspace))
+    policy = cfg.retention
+    if policy.keep_last_n is None and policy.keep_monthly is None:
+        console.print(
+            "[yellow]retention policy not configured[/] — "
+            "set [retention] keep_last_n / keep_monthly in config.toml"
+        )
+        raise typer.Exit(0)
+
+    conn = connect(workspace_db(workspace))
+    try:
+        stats = retention_apply(
+            conn,
+            keep_last_n=policy.keep_last_n,
+            keep_monthly=policy.keep_monthly,
+            dry_run=dry_run,
+        )
+    finally:
+        conn.close()
+
+    verb = "would delete" if dry_run else "deleted"
+    console.print(
+        f"[green]retention[/]: total={stats.total_scans}, "
+        f"kept={stats.kept}, {verb}={stats.deleted}, "
+        f"non-completed-preserved={stats.skipped_non_completed}"
+    )
 
 
 def main() -> None:
