@@ -91,3 +91,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS services_fts USING fts5(
   content='services',
   content_rowid='rowid'
 );
+
+-- Keep services_fts in sync with services. content='services' means FTS5
+-- reads column text from the base table, but the index still needs
+-- tokenized rowids; the standard pattern is the three triggers below.
+CREATE TRIGGER IF NOT EXISTS services_fts_ai AFTER INSERT ON services BEGIN
+  INSERT INTO services_fts(rowid, banner, tech, cert_sans)
+  VALUES (new.rowid, new.banner, new.tech, new.cert_sans);
+END;
+
+CREATE TRIGGER IF NOT EXISTS services_fts_ad AFTER DELETE ON services BEGIN
+  INSERT INTO services_fts(services_fts, rowid, banner, tech, cert_sans)
+  VALUES ('delete', old.rowid, old.banner, old.tech, old.cert_sans);
+END;
+
+CREATE TRIGGER IF NOT EXISTS services_fts_au AFTER UPDATE ON services BEGIN
+  INSERT INTO services_fts(services_fts, rowid, banner, tech, cert_sans)
+  VALUES ('delete', old.rowid, old.banner, old.tech, old.cert_sans);
+  INSERT INTO services_fts(rowid, banner, tech, cert_sans)
+  VALUES (new.rowid, new.banner, new.tech, new.cert_sans);
+END;

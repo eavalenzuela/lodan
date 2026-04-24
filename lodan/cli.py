@@ -232,9 +232,66 @@ def diff_cmd(
 
 
 @app.command("query")
-def query_cmd(expression: str) -> None:
-    """Run a mini-DSL query (sans:*.corp.example.com AND port:443)."""
-    _not_implemented("query")
+def query_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    expression: Annotated[str, typer.Argument(help="DSL expression.")],
+    scan: Annotated[
+        int | None,
+        typer.Option("--scan", help="Limit to one scan id (default: every scan)."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 200,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit JSONL instead of a table."),
+    ] = False,
+) -> None:
+    """Run a mini-DSL query across services.
+
+    Examples:
+        lodan query w "port:443 AND sans:*.corp.example.com"
+        lodan query w "tech:nginx OR tech:apache"
+        lodan query w "banner:OpenSSH*"
+    """
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    import json
+
+    from lodan.store.db import connect
+    from lodan.store.query import QueryError, run_query
+
+    conn = connect(workspace_db(workspace))
+    try:
+        rows = run_query(conn, expression, scan_id=scan, limit=limit)
+    except QueryError as e:
+        err.print(f"[red]query error:[/] {e}")
+        raise typer.Exit(1) from None
+    finally:
+        conn.close()
+
+    if as_json:
+        # Bypass rich so line wrapping doesn't split JSON records.
+        for row in rows:
+            sys.stdout.write(json.dumps(row, default=str) + "\n")
+        return
+
+    if not rows:
+        console.print("[yellow]no matches[/]")
+        return
+    from rich.table import Table
+
+    table = Table(show_lines=False)
+    for col in ("scan", "ip", "port", "proto", "service", "banner"):
+        table.add_column(col)
+    for row in rows:
+        banner = (row.get("banner") or "")[:80]
+        table.add_row(
+            str(row["scan_id"]), row["ip"], str(row["port"]),
+            row["proto"], row.get("service") or "", banner,
+        )
+    console.print(table)
+    console.print(f"[green]{len(rows)} match(es)[/]")
 
 
 @app.command("serve")
