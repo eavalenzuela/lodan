@@ -238,9 +238,57 @@ def query_cmd(expression: str) -> None:
 
 
 @app.command("serve")
-def serve_cmd(workspace: str) -> None:
+def serve_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    addr: Annotated[
+        str,
+        typer.Option("--addr", help="[host]:port. Default 127.0.0.1:8765."),
+    ] = "127.0.0.1:8765",
+    auth_token: Annotated[
+        str | None,
+        typer.Option("--auth-token", help="Required when binding non-loopback."),
+    ] = None,
+) -> None:
     """Serve the web UI for the given workspace."""
-    _not_implemented("serve")
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    host, _, port_s = addr.rpartition(":")
+    host = host or "127.0.0.1"
+    try:
+        port = int(port_s)
+    except ValueError:
+        err.print(f"[red]invalid --addr:[/] {addr!r}")
+        raise typer.Exit(1) from None
+
+    if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
+        err.print(
+            "[red]refusing to bind non-loopback without --auth-token[/] "
+            "(token is checked against the X-Lodan-Token header)"
+        )
+        raise typer.Exit(1)
+
+    import uvicorn
+
+    from lodan.ui.app import create_app
+
+    fastapi_app = create_app(workspace)
+    if auth_token:
+        _install_auth_token(fastapi_app, auth_token)
+    console.print(f"[green]serving[/] http://{host}:{port} (workspace={workspace})")
+    uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
+
+
+def _install_auth_token(fastapi_app, token: str) -> None:
+    from fastapi import Request
+    from fastapi.responses import PlainTextResponse
+
+    @fastapi_app.middleware("http")
+    async def _auth(request: Request, call_next):
+        if request.headers.get("X-Lodan-Token") != token:
+            return PlainTextResponse("unauthorized", status_code=401)
+        return await call_next(request)
 
 
 @app.command("export")

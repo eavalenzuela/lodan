@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>lodan — {{ workspace }}{% if page_title %} — {{ page_title }}{% endif %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">lodan</a>
+    <span class="workspace">{{ workspace }}</span>
+    <nav>
+      <a href="/">dashboard</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>read-only · local Shodan for ranges you own</small>
+  </footer>
+</body>
+</html>

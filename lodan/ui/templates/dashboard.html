@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set page_title = "dashboard" %}
+{% block content %}
+<section class="summary">
+  <h1>Dashboard</h1>
+  {% if summary.latest %}
+    <div class="card latest-scan">
+      <h2>Latest scan</h2>
+      <p>
+        <strong>#{{ summary.latest.id }}</strong>
+        <span class="muted">started {{ summary.latest.started_at }}</span>
+      </p>
+      <ul class="totals">
+        <li><span class="label">services</span><span class="value">{{ summary.totals.services }}</span></li>
+        <li><span class="label">hosts</span><span class="value">{{ summary.totals.hosts }}</span></li>
+        <li><span class="label">CVE matches</span><span class="value">{{ summary.totals.vulns }}</span></li>
+      </ul>
+    </div>
+    {% if summary.last_diff %}
+      <div class="card diff">
+        <h2>Diff {{ summary.last_diff.from_scan_id }} → {{ summary.last_diff.to_scan_id }}</h2>
+        <ul class="kinds">
+          {% for kind, count in summary.last_diff.by_kind.items() %}
+            <li><span class="label">{{ kind }}</span><span class="value">{{ count }}</span></li>
+          {% endfor %}
+        </ul>
+        <p class="total">{{ summary.last_diff.total }} total findings</p>
+      </div>
+    {% else %}
+      <p class="muted">No diff — this is the first scan in the workspace.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">No scans yet. Run <code>lodan scan {{ workspace }}</code>.</p>
+  {% endif %}
+</section>
+
+<section class="history">
+  <h2>Scan history</h2>
+  {% if summary.scans %}
+    <table>
+      <thead><tr><th>#</th><th>started</th><th>finished</th><th>status</th></tr></thead>
+      <tbody>
+        {% for s in summary.scans %}
+          <tr>
+            <td>{{ s.id }}</td>
+            <td>{{ s.started_at }}</td>
+            <td>{{ s.finished_at or "—" }}</td>
+            <td class="status-{{ s.status }}">{{ s.status }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}

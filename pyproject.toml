@@ -21,6 +21,7 @@ include = ["lodan*"]
 [tool.setuptools.package-data]
 "lodan.store" = ["schema.sql"]
 "lodan.enrich" = ["cve_schema.sql"]
+"lodan.ui" = ["templates/*.html", "static/*.css"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
