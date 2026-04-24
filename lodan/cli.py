@@ -176,12 +176,59 @@ def scan_cmd(
         f"{summary.vulns_matched} CVE matches, "
         f"{summary.authz_rejections} authz-rejected"
     )
+    if summary.diff_from is not None:
+        console.print(
+            f"  diff vs scan {summary.diff_from}: {summary.diff_total} findings"
+        )
 
 
 @app.command("diff")
-def diff_cmd(workspace: str) -> None:
+def diff_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    from_: Annotated[
+        str | None,
+        typer.Option("--from", help="Source scan: id, 'prev', 'latest', or ISO date."),
+    ] = None,
+    to_: Annotated[
+        str | None,
+        typer.Option("--to", help="Target scan: id, 'prev', 'latest', or ISO date."),
+    ] = None,
+) -> None:
     """Diff two scans within a workspace."""
-    _not_implemented("diff")
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    from lodan.config import Config
+    from lodan.diff import resolver as diff_resolver
+    from lodan.diff.scanner import compute_and_store
+    from lodan.store.db import connect
+
+    cfg = Config.load(workspace_config(workspace))
+    from_token = from_ or cfg.diff.default_from
+    to_token = to_ or "latest"
+
+    conn = connect(workspace_db(workspace))
+    try:
+        try:
+            from_id = diff_resolver.resolve(conn, from_token)
+            to_id = diff_resolver.resolve(conn, to_token)
+        except diff_resolver.ResolveError as e:
+            err.print(f"[red]{e}[/]")
+            raise typer.Exit(1) from None
+        if from_id == to_id:
+            err.print(f"[red]from and to resolve to the same scan ({from_id})[/]")
+            raise typer.Exit(1)
+        counts = compute_and_store(conn, from_id, to_id)
+    finally:
+        conn.close()
+
+    console.print(
+        f"[green]diff {from_id} -> {to_id}[/]: "
+        f"{counts.new_service} new, {counts.gone_service} gone, "
+        f"{counts.changed} changed, {counts.new_cert} new certs, "
+        f"{counts.new_host} new hosts ({counts.total} total)"
+    )
 
 
 @app.command("query")

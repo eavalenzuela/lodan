@@ -48,7 +48,7 @@ def test_init_rejects_bad_cidr(lodan_home: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_diff_not_implemented(lodan_home: Path) -> None:
+def test_serve_not_implemented(lodan_home: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["diff", "whatever"])
+    result = runner.invoke(app, ["serve", "whatever"])
     assert result.exit_code == 2

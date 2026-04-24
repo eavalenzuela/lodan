@@ -11,6 +11,8 @@ from ipaddress import IPv4Network
 
 from lodan import authz
 from lodan.config import Config
+from lodan.diff import resolver as diff_resolver
+from lodan.diff.scanner import compute_and_store
 from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
 from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
@@ -32,6 +34,8 @@ class ScanSummary:
         self.services_probed = 0
         self.hosts_enriched = 0
         self.vulns_matched = 0
+        self.diff_total = 0
+        self.diff_from: int | None = None
 
 
 async def run_scan(
@@ -110,6 +114,11 @@ async def run_scan(
             if cfg.enrich.cve:
                 summary.vulns_matched = _run_cve_enrichment(conn, handle.scan_id)
             writer.finish_scan(conn, handle, status="completed")
+            prev = diff_resolver.previous_completed(conn, handle.scan_id)
+            if prev is not None:
+                counts = compute_and_store(conn, prev, handle.scan_id)
+                summary.diff_from = prev
+                summary.diff_total = counts.total
         except Exception as e:
             writer.record_error(conn, handle, stage="discovery", error=repr(e))
             writer.finish_scan(conn, handle, status="failed")
