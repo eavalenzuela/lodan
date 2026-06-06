@@ -97,6 +97,17 @@ class ClientHelloBytes:
         verbatim instead of sha256-truncated. Useful for diffing."""
         return _ja4_compose_raw(**self._ja4_kwargs())
 
+    @property
+    def ja4_o(self) -> str:
+        """JA4 with cipher/extension lists in ClientHello order (not sorted),
+        hashed. Preserves ordering, which the canonical JA4 deliberately drops."""
+        return _ja4_compose(**self._ja4_kwargs(), sort=False)
+
+    @property
+    def ja4_ro(self) -> str:
+        """JA4_o, unhashed: original order and raw lists."""
+        return _ja4_compose_raw(**self._ja4_kwargs(), sort=False)
+
 
 @dataclass(frozen=True)
 class ServerHelloParsed:
@@ -442,13 +453,17 @@ def _ja4_parts(
     alpn: list[bytes],
     supported_versions: list[int],
     has_sni: bool,
+    sort: bool = True,
 ) -> tuple[str, str, str]:
     """Build the three JA4 fields once: (a, cipher_raw, ext_raw).
 
-    `cipher_raw` is the sorted cipher hex list and `ext_raw` the sorted
-    extension hex list (+ "_" + signature algorithms) — i.e. exactly the
-    strings hashed for JA4_b / JA4_c. The hashed JA4 and the raw JA4_r both
-    derive from these, so the GREASE/sort/exclusion rules live in one place.
+    `cipher_raw` / `ext_raw` are the cipher and extension (+ "_" + signature
+    algorithm) hex lists — exactly the strings hashed for JA4_b / JA4_c. With
+    `sort=True` (default) the cipher and extension lists are sorted, giving the
+    canonical JA4 / JA4_r; with `sort=False` they keep ClientHello order,
+    giving the JA4_o / JA4_ro variants. Signature algorithms are never sorted
+    in any variant. All four forms therefore share one copy of the
+    GREASE-filter / SNI+ALPN-exclusion rules.
     """
     ciphers = [c for c in ciphers if c not in _GREASE]
     exts = [e for e in extensions if e not in _GREASE]
@@ -464,11 +479,14 @@ def _ja4_parts(
         _ja4_alpn_code(alpn[0] if alpn else None),
     ])
 
-    cipher_raw = ",".join(f"{c:04x}" for c in sorted(ciphers))
+    cipher_seq = sorted(ciphers) if sort else ciphers
+    cipher_raw = ",".join(f"{c:04x}" for c in cipher_seq)
 
-    hash_exts = sorted(e for e in exts if e not in _JA4_IGNORED_EXTENSIONS)
+    kept_exts = [e for e in exts if e not in _JA4_IGNORED_EXTENSIONS]
+    if sort:
+        kept_exts = sorted(kept_exts)
     sigs = [a for a in sig_algs if a not in _GREASE]
-    ext_raw = ",".join(f"{e:04x}" for e in hash_exts)
+    ext_raw = ",".join(f"{e:04x}" for e in kept_exts)
     if sigs:
         ext_raw = f"{ext_raw}_" + ",".join(f"{a:04x}" for a in sigs)
 

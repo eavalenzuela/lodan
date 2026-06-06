@@ -322,6 +322,50 @@ def test_ja4_r_is_unhashed_form_of_ja4() -> None:
     assert cipher_raw == ",".join(f"{x:04x}" for x in sorted(ch.ciphers))
 
 
+def test_ja4_o_preserves_clienthello_order() -> None:
+    ch = build_client_hello()
+    a_o, cipher_raw, *ext_parts = ch.ja4_ro.split("_")
+    # ja4_a is identical across all four variants.
+    assert a_o == ch.ja4.split("_")[0]
+    # Ciphers stay in ClientHello order (NOT sorted), GREASE-free.
+    assert cipher_raw == ",".join(f"{c:04x}" for c in ch.ciphers)
+    # ja4_o is the hashed form of the same original-order fields.
+    _, b_o, c_o = ch.ja4_o.split("_")
+    assert _sha12(cipher_raw) == b_o
+    assert _sha12("_".join(ext_parts)) == c_o
+
+
+def test_ja4_o_differs_from_sorted_ja4() -> None:
+    ch = build_client_hello()
+    # Our cipher/extension lists aren't already in sorted order, so the
+    # original-order hashes must differ from the canonical sorted ones.
+    sorted_b, sorted_c = ch.ja4.split("_")[1:]
+    o_b, o_c = ch.ja4_o.split("_")[1:]
+    assert o_b != sorted_b
+    assert o_c != sorted_c
+    # Same building blocks though: a is shared, and ja4_ro hashes back to ja4_o.
+    assert ch.ja4_o.split("_")[0] == ch.ja4.split("_")[0]
+
+
+def test_ja4_o_equals_ja4_when_already_sorted() -> None:
+    # If a hello happens to send sorted ciphers/extensions, _o collapses to the
+    # canonical form — a good invariant check on the shared parts builder.
+    ch = ClientHelloBytes(
+        record=b"",
+        version=0x0303,
+        ciphers=[0x1301, 0x1302, 0x1303],        # already ascending
+        extensions=[EXT_SUPPORTED_VERSIONS],     # single ext, order irrelevant
+        groups=[],
+        point_formats=[],
+        sig_algs=[0x0403],
+        alpn=[b"h2"],
+        supported_versions=[0x0303],
+        has_sni=False,
+    )
+    assert ch.ja4_o == ch.ja4
+    assert ch.ja4_ro == ch.ja4_r
+
+
 def test_ja4s_r_is_unhashed_form_of_ja4s() -> None:
     body = _fake_server_hello(
         cipher=0xc02f,

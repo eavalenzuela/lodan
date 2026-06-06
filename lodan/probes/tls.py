@@ -110,6 +110,8 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
                 "ja3_string": ch.ja3_string,
                 "ja4": ch.ja4,
                 "ja4_r": ch.ja4_r,
+                "ja4_o": ch.ja4_o,
+                "ja4_ro": ch.ja4_ro,
             },
         )
     sh = parse_server_hello(sh_body)
@@ -148,6 +150,8 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
         "ja4s": sh.ja4s,
         "ja4_r": ch.ja4_r,
         "ja4s_r": sh.ja4s_r,
+        "ja4_o": ch.ja4_o,
+        "ja4_ro": ch.ja4_ro,
         "alpn": sh.alpn,
         "server_extensions": sh.extensions,
         "cert_count": len(chain),
