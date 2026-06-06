@@ -44,3 +44,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "docker: integration tests that need Docker; opt-in via LODAN_DOCKER_TESTS=1",
+]

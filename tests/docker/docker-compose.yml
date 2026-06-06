@@ -1,0 +1,41 @@
+# Integration fixtures for lodan's probe layer. Brought up by the
+# tests/docker/conftest.py session fixture when LODAN_DOCKER_TESTS=1, or
+# manually with `docker compose -f tests/docker/docker-compose.yml up -d`.
+#
+# Everything binds to 127.0.0.1 on high ports so it never collides with a
+# real service and never leaves the loopback interface. All services are
+# unauthenticated on purpose — lodan only ever performs detection.
+name: lodan-itest
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:18443:443"
+    volumes:
+      - ./nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:16379:6379"
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "127.0.0.1:17017:27017"
+
+  openssh:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - PASSWORD_ACCESS=true
+      - USER_NAME=lodan
+      - USER_PASSWORD=lodan-not-used
+    ports:
+      - "127.0.0.1:12222:2222"
