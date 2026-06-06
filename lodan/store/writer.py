@@ -94,6 +94,7 @@ def update_service_from_probe(
             ja3s = COALESCE(?, ja3s),
             ja4 = COALESCE(?, ja4),
             ja4s = COALESCE(?, ja4s),
+            ssh_hostkey = COALESCE(?, ssh_hostkey),
             favicon_mmh3 = COALESCE(?, favicon_mmh3),
             tech = COALESCE(?, tech),
             raw = COALESCE(?, raw)
@@ -108,6 +109,7 @@ def update_service_from_probe(
             result.ja3s,
             result.ja4,
             result.ja4s,
+            result.ssh_hostkey,
             result.favicon_mmh3,
             result.tech_json(),
             result.raw_json() if result.raw else None,
@@ -117,6 +119,47 @@ def update_service_from_probe(
             proto,
         ),
     )
+
+
+def record_favicons(conn: sqlite3.Connection, handle: ScanHandle) -> int:
+    """Register this scan's favicon hashes in the workspace `favicons` table.
+
+    INSERT OR IGNORE keyed on mmh3 means the first scan to see a hash wins the
+    first_seen_* slot, so the table accumulates a stable hash→host map across
+    rescans. Operator labels (set via `lodan favicon-label`) are never touched
+    here. Returns the number of rows considered (not necessarily new).
+    """
+    rows = conn.execute(
+        "SELECT favicon_mmh3, ip, port FROM services "
+        "WHERE scan_id = ? AND favicon_mmh3 IS NOT NULL "
+        "ORDER BY ip, port",
+        (handle.scan_id,),
+    ).fetchall()
+    for mmh3, ip, port in rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO favicons "
+            "(mmh3, first_seen_scan, first_seen_ip, first_seen_port) "
+            "VALUES (?, ?, ?, ?)",
+            (mmh3, handle.scan_id, ip, port),
+        )
+    return len(rows)
+
+
+def set_favicon_label(conn: sqlite3.Connection, mmh3: int, label: str) -> None:
+    """Upsert an operator label for a favicon hash, creating the row if the
+    hash hasn't been seen in a scan yet."""
+    conn.execute(
+        "INSERT INTO favicons (mmh3, label) VALUES (?, ?) "
+        "ON CONFLICT(mmh3) DO UPDATE SET label = excluded.label",
+        (mmh3, label),
+    )
+
+
+def favicon_label(conn: sqlite3.Connection, mmh3: int) -> str | None:
+    row = conn.execute(
+        "SELECT label FROM favicons WHERE mmh3 = ?", (mmh3,)
+    ).fetchone()
+    return row[0] if row else None
 
 
 def discovered_tuples(conn: sqlite3.Connection, handle: ScanHandle) -> set[tuple[str, int, str]]:

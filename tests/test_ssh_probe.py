@@ -44,11 +44,22 @@ def test_parse_emits_probe_result() -> None:
     assert "1 host key" in (result.banner or "")
     assert result.raw["host_keys"] == [{"algo": "ssh-ed25519", "sha256": "a" * 64}]
     assert result.raw["parsed"]["software"] == "OpenSSH_9.3"
+    # The first (default) host key is promoted to the pivotable column.
+    assert result.ssh_hostkey == "a" * 64
+
+
+def test_parse_promotes_first_host_key() -> None:
+    result = parse(
+        "SSH-2.0-OpenSSH_9.3",
+        host_keys=[("ssh-ed25519", "a" * 64), ("rsa-sha2-512", "b" * 64)],
+    )
+    assert result.ssh_hostkey == "a" * 64
 
 
 def test_parse_without_host_keys() -> None:
     result = parse("SSH-2.0-OpenSSH_9.3")
     assert result.raw["host_keys"] == []
+    assert result.ssh_hostkey is None
 
 
 def test_parse_unknown_banner_still_captures_raw() -> None:

@@ -15,8 +15,10 @@ import pytest
 
 from lodan.enrich.ip2location_data import (
     ASN_LITE_FILE_CODE,
+    COUNTRY_LITE_FILE_CODE,
     IP2LocationDownloadError,
     download_asn,
+    download_country,
     extract_bin,
     token_from_env,
 )
@@ -75,6 +77,27 @@ def test_download_asn_writes_bin(tmp_path: Path) -> None:
     assert written == dest
     assert dest.read_bytes() == payload
     assert seen == {"file": ASN_LITE_FILE_CODE, "token": "tok123"}
+
+
+def test_download_country_uses_db1_file_code(tmp_path: Path) -> None:
+    payload = b"COUNTRY-DB"
+    zip_bytes = _zip_with({"IP2LOCATION-LITE-DB1.BIN": payload})
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["file"] = request.url.params.get("file")
+        return httpx.Response(200, content=zip_bytes)
+
+    transport = httpx.MockTransport(handler)
+    dest = tmp_path / "IP2LOCATION-LITE-DB1.BIN"
+
+    async def run() -> Path:
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await download_country("tok", dest=dest, _client=client)
+
+    written = asyncio.run(run())
+    assert written.read_bytes() == payload
+    assert seen["file"] == COUNTRY_LITE_FILE_CODE
 
 
 def test_download_asn_surfaces_bad_token(tmp_path: Path) -> None:

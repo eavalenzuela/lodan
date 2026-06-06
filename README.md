@@ -17,8 +17,9 @@ end-to-end:
   SMB (SMB2 NEGOTIATE), RDP (X.224 NEG_REQ), MQTT, Redis, MongoDB,
   Elasticsearch, DNS, FTP, SMTP, Docker, Kubernetes. All
   detection-only — no credentials, no auth attempts.
-- Offline enrichment: rDNS, ASN/GeoIP via IP2Location LITE (with
-  token-based auto-download), CVE matching against the NVD 2.0 snapshot.
+- Offline enrichment: rDNS, ASN/org + country via IP2Location LITE
+  (token-based auto-download of both DB-ASN and DB1), CVE matching
+  against the NVD 2.0 snapshot.
 - Scan-to-scan diff: `new_service`, `gone_service`, `changed`,
   `new_cert` (workspace-scoped), `new_host`; auto-computed after every
   scan.
@@ -27,8 +28,8 @@ end-to-end:
   grammar documented under [Query DSL](#query-dsl).
 - Web UI (FastAPI + HTMX, no JS framework, no build step): dashboard,
   hosts / services tables with filtering, pivot views
-  (cert / favicon / JA3S / JA4S / SAN), diff timeline + detail, DSL
-  query box.
+  (cert / favicon / JA3S / JA4S / SSH host-key / SAN), operator-labelled
+  favicons, diff timeline + detail, DSL query box.
 
 ## Install
 
@@ -54,9 +55,10 @@ lodan init home-lab --cidrs 10.0.0.0/24,192.168.1.0/24
 # subsequent runs are incremental via lastModStartDate.
 lodan update --cves
 
-# Optional — pull IP2Location LITE DB-ASN (free account token) for ASN /
-# org on hosts. Token also read from $LODAN_IP2LOCATION_TOKEN. Without a
-# token this just reports BIN presence + manual-download instructions.
+# Optional — pull IP2Location LITE DB-ASN (ASN/org) and DB1 (country) with
+# a free account token for host enrichment. Token also read from
+# $LODAN_IP2LOCATION_TOKEN. Without a token this just reports BIN presence
+# + manual-download instructions.
 lodan update --ip2location --token <YOUR_TOKEN>
 
 # Run a scan. Produces services / hosts / vulns / scan_diffs rows.
@@ -65,6 +67,10 @@ lodan scan home-lab
 # Pivot queries.
 lodan query home-lab "port:443 AND sans:*.corp.example.com"
 lodan query home-lab "tech:nginx OR tech:apache" --json
+lodan query home-lab "hostkey:<sha256>"        # rogue-rebuild pivot
+
+# Tag a favicon hash so the pivot views show a human label.
+lodan favicon-label home-lab -1234567890 "Jenkins login"
 
 # Diff.
 lodan diff home-lab                  # prev -> latest by default
@@ -85,13 +91,14 @@ lodan prune home-lab --dry-run
 |---|---|
 | `lodan init <ws> --cidrs …`    | create workspace, bootstrap SQLite schema |
 | `lodan update --cves`           | NVD 2.0 snapshot refresh (incremental) |
-| `lodan update --ip2location [--token T]` | download IP2Location LITE DB-ASN (with token) or report status |
+| `lodan update --ip2location [--token T]` | download IP2Location LITE DB-ASN + DB1 (with token) or report status |
 | `lodan scan <ws>`               | discover + probe + enrich + auto-diff |
 | `lodan query <ws> "expr"`       | run a mini-DSL query; `--json` for JSONL |
 | `lodan diff <ws>`               | scan-to-scan diff; `--from`/`--to` accept id / `prev` / `latest` / ISO date |
 | `lodan serve <ws>`              | FastAPI UI; localhost-only unless `--auth-token` |
 | `lodan export <ws>`             | JSONL or JSON array dump; `--include`, `--scan`, `--output` |
 | `lodan prune <ws>`              | apply `[retention]` from config; `--dry-run` |
+| `lodan favicon-label <ws> <mmh3> "<label>"` | tag a favicon hash for the pivot views |
 
 ## Query DSL
 
@@ -99,7 +106,7 @@ lodan prune home-lab --dry-run
 query   := term (WS (AND|OR) WS term)*
 term    := NOT? key ':' value
 key     := banner | tech | sans | port | service | ip
-         | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | cve
+         | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -108,6 +115,8 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
 - `port` and `favicon_mmh3` require integers and reject wildcards.
 - `cve:CVE-2023-1234` joins through the `vulns` table on
   `(scan_id, ip, port)`.
+- `hostkey:<sha256>` matches the server's default SSH host key — the
+  "find every host presenting this key" / rogue-rebuild pivot.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
@@ -127,7 +136,7 @@ ip:10.0.0.*
 ~/.lodan/
   data/
     nvd/cve.db                 # shared CVE store (workspace-agnostic)
-    ip2location/…              # operator-dropped LITE BIN
+    ip2location/                # LITE BINs (DB-ASN + DB1 country)
   workspaces/<name>/
     config.toml                # authorized_ranges + knobs
     lodan.db                   # one DB per workspace (portable)

@@ -68,3 +68,5 @@ def test_ssh_banner_and_host_keys(docker_stack) -> None:
     assert "openssh" in parsed.software.lower()
     # asyncssh is a dependency, so host-key collection should succeed.
     assert res.raw["host_keys"], "expected at least one SSH host key"
+    # The promoted column should match the first collected key's fingerprint.
+    assert res.ssh_hostkey == res.raw["host_keys"][0]["sha256"]

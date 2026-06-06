@@ -8,6 +8,7 @@ import pytest
 
 from lodan.enrich import hosts as hosts_mod
 from lodan.enrich.asn import ASNRecord, ASNResolver
+from lodan.enrich.geoip import CountryResolver
 from lodan.store import writer
 from lodan.store.db import bootstrap, connect
 
@@ -28,6 +29,16 @@ class _StubResolver:
         self._table = table
 
     def lookup(self, ip: str) -> ASNRecord | None:
+        return self._table.get(ip)
+
+
+class _StubCountryResolver:
+    available = True
+
+    def __init__(self, table: dict[str, str]) -> None:
+        self._table = table
+
+    def lookup(self, ip: str) -> str | None:
         return self._table.get(ip)
 
 
@@ -97,3 +108,50 @@ def test_asn_resolver_unavailable_when_bin_missing(tmp_path: Path) -> None:
     r = ASNResolver(db_path=tmp_path / "nope.bin")
     assert r.available is False
     assert r.lookup("8.8.8.8") is None
+
+
+def test_country_resolver_unavailable_when_bin_missing(tmp_path: Path) -> None:
+    r = CountryResolver(db_path=tmp_path / "nope.bin")
+    assert r.available is False
+    assert r.lookup("8.8.8.8") is None
+
+
+def test_enrich_populates_country(db) -> None:
+    handle = writer.open_scan(db, "w", ["10.0.0.0/24"])
+    writer.upsert_discovered_service(db, handle, "10.0.0.5", 443, "tcp")
+    writer.upsert_discovered_service(db, handle, "10.0.0.7", 80, "tcp")
+
+    asn = _StubResolver({"10.0.0.5": ASNRecord(asn=64500, asn_org="Lab-AS")})
+    country = _StubCountryResolver({"10.0.0.5": "US"})  # .7 has no country
+
+    async def _no_rdns(ip: str, timeout: float = 2.0) -> str | None:
+        return None
+
+    with patch.object(hosts_mod, "rdns_resolve", _no_rdns):
+        asyncio.run(
+            hosts_mod.enrich_hosts(
+                db, handle, do_rdns=False, resolver=asn, country_resolver=country
+            )
+        )
+
+    rows = dict(
+        db.execute(
+            "SELECT ip, country FROM hosts WHERE scan_id = ?", (handle.scan_id,)
+        ).fetchall()
+    )
+    assert rows == {"10.0.0.5": "US", "10.0.0.7": None}
+
+
+def test_enrich_geoip_off_leaves_country_null(db) -> None:
+    handle = writer.open_scan(db, "w", ["10.0.0.0/24"])
+    writer.upsert_discovered_service(db, handle, "10.0.0.5", 443, "tcp")
+    country = _StubCountryResolver({"10.0.0.5": "US"})
+
+    asyncio.run(
+        hosts_mod.enrich_hosts(
+            db, handle, do_rdns=False, do_asn=False, do_geoip=False,
+            country_resolver=country,
+        )
+    )
+    (c,) = db.execute("SELECT country FROM hosts WHERE ip = ?", ("10.0.0.5",)).fetchone()
+    assert c is None

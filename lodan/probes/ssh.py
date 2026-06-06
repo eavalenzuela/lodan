@@ -124,9 +124,14 @@ def parse(banner_line: str, host_keys: list[tuple[str, str]] | None = None) -> P
         "parsed": parsed.__dict__ if parsed else None,
         "host_keys": [{"algo": a, "sha256": fp} for a, fp in host_keys],
     }
+    # The server's default host key is the pivot anchor ("all hosts presenting
+    # this key" → spot rogue rebuilds). asyncssh hands back the negotiated
+    # default, so the first entry is the right one to promote to a column.
+    primary_hostkey = host_keys[0][1] if host_keys else None
     return ProbeResult(
         service="ssh",
         banner=" | ".join(banner_parts),
+        ssh_hostkey=primary_hostkey,
         raw=raw,
     )
 

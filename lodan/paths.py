@@ -48,3 +48,7 @@ def ip2location_dir() -> Path:
 
 def ip2location_asn_bin() -> Path:
     return ip2location_dir() / "IP2LOCATION-LITE-ASN.BIN"
+
+
+def ip2location_country_bin() -> Path:
+    return ip2location_dir() / "IP2LOCATION-LITE-DB1.BIN"

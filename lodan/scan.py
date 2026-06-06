@@ -105,14 +105,17 @@ async def run_scan(
                         retries=cfg.scan.retries,
                     ),
                 )
-            if cfg.enrich.rdns or cfg.enrich.asn:
+            if cfg.enrich.rdns or cfg.enrich.asn or cfg.enrich.geoip:
                 summary.hosts_enriched = await enrich_hosts(
                     conn, handle,
                     do_rdns=cfg.enrich.rdns,
                     do_asn=cfg.enrich.asn,
+                    do_geoip=cfg.enrich.geoip,
                 )
             if cfg.enrich.cve:
                 summary.vulns_matched = _run_cve_enrichment(conn, handle.scan_id)
+            if cfg.enrich.favicon:
+                writer.record_favicons(conn, handle)
             writer.finish_scan(conn, handle, status="completed")
             prev = diff_resolver.previous_completed(conn, handle.scan_id)
             if prev is not None:

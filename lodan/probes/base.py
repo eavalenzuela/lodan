@@ -21,6 +21,7 @@ class ProbeResult:
     ja3s: str | None = None
     ja4: str | None = None
     ja4s: str | None = None
+    ssh_hostkey: str | None = None
     favicon_mmh3: int | None = None
     tech: list[str] | None = None
     raw: dict[str, Any] = field(default_factory=dict)

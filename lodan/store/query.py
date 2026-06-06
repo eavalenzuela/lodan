@@ -5,7 +5,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
     query   := term (WS (AND|OR) WS term)*
     term    := NOT? key ':' value
     key     := banner | tech | sans | port | service | ip
-             | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | cve
+             | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -31,7 +31,7 @@ class QueryError(ValueError):
 _VALID_KEYS = {
     "banner", "tech", "sans",
     "port", "service", "ip",
-    "favicon_mmh3", "ja3", "ja3s", "ja4", "ja4s",
+    "favicon_mmh3", "ja3", "ja3s", "ja4", "ja4s", "hostkey",
     "cve",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -166,6 +166,9 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
     if key in ("ja3", "ja3s", "ja4", "ja4s"):
         return (f"services.{key} = ?", [value])
 
+    if key == "hostkey":
+        return ("services.ssh_hostkey = ?", [value])
+
     if key == "cve":
         return (
             "(services.scan_id, services.ip, services.port) IN "
@@ -216,7 +219,7 @@ def _escape(s: str) -> str:
 SERVICE_COLUMNS = (
     "scan_id", "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3", "ja3s", "ja4", "ja4s",
-    "favicon_mmh3", "tech",
+    "ssh_hostkey", "favicon_mmh3", "tech",
 )
 _VALID_COLS = set(SERVICE_COLUMNS)
 _SAFE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

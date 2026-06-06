@@ -214,10 +214,12 @@ def create_app(workspace: str) -> FastAPI:
         except ValueError:
             raise HTTPException(400, detail="favicon hash must be a signed int32") from None
         matches = _pivot_exact(db, "favicon_mmh3", hash_int)
+        from lodan.store.writer import favicon_label
         return templates.TemplateResponse(
             request, "pivot.html",
             {"workspace": workspace, "kind": "favicon_mmh3",
-             "needle": str(hash_int), "matches": matches},
+             "needle": str(hash_int), "matches": matches,
+             "label": favicon_label(db, hash_int)},
         )
 
     @app.get("/pivot/ja3s/{fp}", response_class=HTMLResponse)
@@ -243,6 +245,19 @@ def create_app(workspace: str) -> FastAPI:
         return templates.TemplateResponse(
             request, "pivot.html",
             {"workspace": workspace, "kind": "ja4s",
+             "needle": fp, "matches": matches},
+        )
+
+    @app.get("/pivot/hostkey/{fp}", response_class=HTMLResponse)
+    def pivot_hostkey(
+        request: Request,
+        fp: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        matches = _pivot_exact(db, "ssh_hostkey", fp)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "ssh_hostkey",
              "needle": fp, "matches": matches},
         )
 
@@ -362,7 +377,8 @@ def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dic
 
 def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dict]:
     query = (
-        "SELECT ip, port, proto, service, banner, cert_fingerprint, ja3s, ja4s, tech "
+        "SELECT ip, port, proto, service, banner, cert_fingerprint, ja3s, ja4s, "
+        "ssh_hostkey, tech "
         "FROM services WHERE scan_id = ?"
     )
     params: list = [scan_id]
@@ -379,7 +395,7 @@ def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[
         {
             "ip": r[0], "port": r[1], "proto": r[2], "service": r[3],
             "banner": r[4], "cert_fingerprint": r[5], "ja3s": r[6], "ja4s": r[7],
-            "tech": r[8],
+            "ssh_hostkey": r[8], "tech": r[9],
         }
         for r in db.execute(query, params).fetchall()
     ]
@@ -409,10 +425,12 @@ def _services_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[di
     return [
         {
             "port": r[0], "proto": r[1], "service": r[2], "banner": r[3],
-            "cert_fingerprint": r[4], "ja3s": r[5], "ja4s": r[6], "tech": r[7],
+            "cert_fingerprint": r[4], "ja3s": r[5], "ja4s": r[6],
+            "ssh_hostkey": r[7], "tech": r[8],
         }
         for r in db.execute(
-            "SELECT port, proto, service, banner, cert_fingerprint, ja3s, ja4s, tech "
+            "SELECT port, proto, service, banner, cert_fingerprint, ja3s, ja4s, "
+            "ssh_hostkey, tech "
             "FROM services WHERE scan_id = ? AND ip = ? ORDER BY port",
             (scan_id, ip),
         )
@@ -474,7 +492,7 @@ def _diff_findings(
 
 
 def _pivot_exact(db: sqlite3.Connection, column: str, value) -> list[dict]:
-    if column not in ("cert_fingerprint", "favicon_mmh3", "ja3s", "ja4s"):
+    if column not in ("cert_fingerprint", "favicon_mmh3", "ja3s", "ja4s", "ssh_hostkey"):
         raise ValueError(f"not a pivotable column: {column}")
     rows = db.execute(
         f"SELECT scan_id, ip, port, service, banner, {column} "

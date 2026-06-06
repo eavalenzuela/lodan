@@ -71,3 +71,46 @@ def test_discovered_tuples_round_trip(db_conn) -> None:
         ("10.0.0.5", 22, "tcp"),
         ("10.0.0.5", 53, "udp"),
     }
+
+
+def _seed_favicon(conn, handle, ip, port, mmh3) -> None:
+    writer.upsert_discovered_service(conn, handle, ip, port, "tcp")
+    conn.execute(
+        "UPDATE services SET favicon_mmh3 = ? WHERE scan_id = ? AND ip = ? AND port = ?",
+        (mmh3, handle.scan_id, ip, port),
+    )
+
+
+def test_record_favicons_first_seen_wins_across_scans(db_conn) -> None:
+    h1 = writer.open_scan(db_conn, "w", ["10.0.0.0/24"])
+    _seed_favicon(db_conn, h1, "10.0.0.5", 443, 12345)
+    _seed_favicon(db_conn, h1, "10.0.0.9", 443, 12345)  # same hash, later ip
+    writer.finish_scan(db_conn, h1)
+    assert writer.record_favicons(db_conn, h1) == 2
+
+    h2 = writer.open_scan(db_conn, "w", ["10.0.0.0/24"])
+    _seed_favicon(db_conn, h2, "10.0.0.11", 443, 12345)  # same hash, later scan
+    writer.record_favicons(db_conn, h2)
+
+    row = db_conn.execute(
+        "SELECT first_seen_scan, first_seen_ip FROM favicons WHERE mmh3 = ?", (12345,)
+    ).fetchone()
+    assert row == (h1.scan_id, "10.0.0.5")  # earliest scan + earliest ip retained
+
+
+def test_set_and_get_favicon_label_upserts(db_conn) -> None:
+    # Label can be set even before the hash is seen in a scan.
+    assert writer.favicon_label(db_conn, 999) is None
+    writer.set_favicon_label(db_conn, 999, "Jenkins login")
+    assert writer.favicon_label(db_conn, 999) == "Jenkins login"
+    writer.set_favicon_label(db_conn, 999, "Jenkins (prod)")
+    assert writer.favicon_label(db_conn, 999) == "Jenkins (prod)"
+
+
+def test_record_favicons_preserves_label(db_conn) -> None:
+    writer.set_favicon_label(db_conn, 12345, "Grafana")
+    h1 = writer.open_scan(db_conn, "w", ["10.0.0.0/24"])
+    _seed_favicon(db_conn, h1, "10.0.0.5", 443, 12345)
+    writer.record_favicons(db_conn, h1)
+    # INSERT OR IGNORE must not wipe an existing operator label.
+    assert writer.favicon_label(db_conn, 12345) == "Grafana"

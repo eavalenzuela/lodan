@@ -22,6 +22,7 @@ def connect(path: Path) -> sqlite3.Connection:
 _SERVICES_COLUMN_MIGRATIONS = (
     ("ja4", "TEXT"),
     ("ja4s", "TEXT"),
+    ("ssh_hostkey", "TEXT"),
 )
 
 

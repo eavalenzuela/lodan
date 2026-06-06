@@ -10,7 +10,7 @@
 <p class="muted">
   DSL: <code>key:value</code> with <code>AND</code>, <code>OR</code>,
   <code>NOT</code>. Keys: banner, tech, sans, port, service, ip,
-  favicon_mmh3, ja3, ja3s, ja4, ja4s, cve. <code>*</code> = wildcard.
+  favicon_mmh3, ja3, ja3s, ja4, ja4s, hostkey, cve. <code>*</code> = wildcard.
 </p>
 {% if error %}
   <div class="card" style="border-color: var(--bad);">
@@ -39,6 +39,7 @@
           <td class="fp">
             {% if r.ja3s %}<a href="/pivot/ja3s/{{ r.ja3s }}" title="{{ r.ja3s }}">ja3s</a>{% endif %}
             {% if r.ja4s %}<a href="/pivot/ja4s/{{ r.ja4s }}" title="{{ r.ja4s }}">ja4s</a>{% endif %}
+            {% if r.ssh_hostkey %}<a href="/pivot/hostkey/{{ r.ssh_hostkey }}" title="{{ r.ssh_hostkey }}">hostkey</a>{% endif %}
           </td>
         </tr>
       {% else %}

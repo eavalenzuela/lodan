@@ -32,8 +32,8 @@ def _seed_services(db) -> int:
          "10.0.0.5", 443),
     )
     db.execute(
-        "UPDATE services SET banner=?, service='ssh' WHERE ip=? AND port=?",
-        ("SSH-2.0-OpenSSH_9.3p1", "10.0.0.5", 22),
+        "UPDATE services SET banner=?, service='ssh', ssh_hostkey=? WHERE ip=? AND port=?",
+        ("SSH-2.0-OpenSSH_9.3p1", "f" * 64, "10.0.0.5", 22),
     )
     db.execute(
         "UPDATE services SET banner=?, tech=?, service='http' WHERE ip=? AND port=?",
@@ -126,6 +126,13 @@ def test_or(db) -> None:
 def test_banner_fts_prefix(db) -> None:
     _seed_services(db)
     rows = run_query(db, "banner:OpenSSH*")
+    assert len(rows) == 1
+    assert rows[0]["ip"] == "10.0.0.5" and rows[0]["port"] == 22
+
+
+def test_hostkey_exact_match(db) -> None:
+    _seed_services(db)
+    rows = run_query(db, "hostkey:" + "f" * 64)
     assert len(rows) == 1
     assert rows[0]["ip"] == "10.0.0.5" and rows[0]["port"] == 22
 

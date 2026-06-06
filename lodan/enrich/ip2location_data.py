@@ -22,12 +22,14 @@ from pathlib import Path
 
 import httpx
 
-from lodan.paths import ip2location_asn_bin, ip2location_dir
+from lodan.paths import ip2location_asn_bin, ip2location_country_bin, ip2location_dir
 
-# The LITE download endpoint. `file` is IP2Location's product code; DBASNLITEBIN
-# is the IPv4 LITE DB-ASN binary.
+# The LITE download endpoint. `file` is IP2Location's product code:
+#   DBASNLITEBIN -> IPv4 LITE DB-ASN (ASN + org)
+#   DB1LITEBIN   -> IPv4 LITE DB1   (country)
 IP2LOCATION_DOWNLOAD_URL = "https://www.ip2location.com/download/"
 ASN_LITE_FILE_CODE = "DBASNLITEBIN"
+COUNTRY_LITE_FILE_CODE = "DB1LITEBIN"
 
 
 class IP2LocationDownloadError(RuntimeError):
@@ -39,6 +41,27 @@ def token_from_env() -> str | None:
     return tok.strip() if tok and tok.strip() else None
 
 
+async def _download(
+    token: str,
+    file_code: str,
+    dest: Path,
+    _client: httpx.AsyncClient | None = None,
+) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    client = _client or httpx.AsyncClient(timeout=300, follow_redirects=True)
+    try:
+        resp = await client.get(
+            IP2LOCATION_DOWNLOAD_URL,
+            params={"token": token, "file": file_code},
+        )
+        resp.raise_for_status()
+        content = resp.content
+    finally:
+        if _client is None:
+            await client.aclose()
+    return extract_bin(content, dest)
+
+
 async def download_asn(
     token: str,
     *,
@@ -46,22 +69,19 @@ async def download_asn(
     _client: httpx.AsyncClient | None = None,
 ) -> Path:
     """Fetch and unpack the LITE DB-ASN BIN. Returns the path written."""
-    dest = dest or ip2location_asn_bin()
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    return await _download(token, ASN_LITE_FILE_CODE, dest or ip2location_asn_bin(), _client)
 
-    client = _client or httpx.AsyncClient(timeout=300, follow_redirects=True)
-    try:
-        resp = await client.get(
-            IP2LOCATION_DOWNLOAD_URL,
-            params={"token": token, "file": ASN_LITE_FILE_CODE},
-        )
-        resp.raise_for_status()
-        content = resp.content
-    finally:
-        if _client is None:
-            await client.aclose()
 
-    return extract_bin(content, dest)
+async def download_country(
+    token: str,
+    *,
+    dest: Path | None = None,
+    _client: httpx.AsyncClient | None = None,
+) -> Path:
+    """Fetch and unpack the LITE DB1 (country) BIN. Returns the path written."""
+    return await _download(
+        token, COUNTRY_LITE_FILE_CODE, dest or ip2location_country_bin(), _client
+    )
 
 
 def extract_bin(zip_bytes: bytes, dest: Path) -> Path:

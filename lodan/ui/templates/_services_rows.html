@@ -9,6 +9,7 @@
     <td class="fp">
       {% if s.ja3s %}<a href="/pivot/ja3s/{{ s.ja3s }}" title="{{ s.ja3s }}">ja3s</a>{% endif %}
       {% if s.ja4s %}<a href="/pivot/ja4s/{{ s.ja4s }}" title="{{ s.ja4s }}">ja4s</a>{% endif %}
+      {% if s.ssh_hostkey %}<a href="/pivot/hostkey/{{ s.ssh_hostkey }}" title="{{ s.ssh_hostkey }}">hostkey</a>{% endif %}
     </td>
     <td>
       {% set tech = s.tech | from_json %}

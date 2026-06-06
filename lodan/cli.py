@@ -152,39 +152,52 @@ def update_cmd(
             IP2LocationDownloadError,
             bootstrap_dirs,
             download_asn,
+            download_country,
             token_from_env,
         )
-        from lodan.paths import ip2location_asn_bin
+        from lodan.paths import ip2location_asn_bin, ip2location_country_bin
 
-        bin_path = ip2location_asn_bin()
         bootstrap_dirs()
         tok = token or token_from_env()
+        # (label, BIN path, async download fn). Both LITE products use one token.
+        products = [
+            ("DB-ASN", ip2location_asn_bin(), download_asn),
+            ("DB1 (country)", ip2location_country_bin(), download_country),
+        ]
 
         if tok:
-            console.print(f"Downloading IP2Location LITE DB-ASN to {bin_path} …")
-            try:
-                written = asyncio.run(download_asn(tok))
-            except IP2LocationDownloadError as e:
-                err.print(f"[red]IP2Location download failed[/]: {e}")
-                raise typer.Exit(1) from e
-            size_mb = written.stat().st_size / (1024 * 1024)
-            console.print(
-                f"[green]IP2Location LITE DB-ASN downloaded[/] to {written} ({size_mb:.1f} MB)"
-            )
-        elif bin_path.exists():
-            size_mb = bin_path.stat().st_size / (1024 * 1024)
-            console.print(
-                f"[green]IP2Location LITE DB-ASN present[/] at {bin_path} ({size_mb:.1f} MB)"
-            )
+            for label, _path, download in products:
+                console.print(f"Downloading IP2Location LITE {label} …")
+                try:
+                    written = asyncio.run(download(tok))
+                except IP2LocationDownloadError as e:
+                    err.print(f"[red]IP2Location {label} download failed[/]: {e}")
+                    raise typer.Exit(1) from e
+                size_mb = written.stat().st_size / (1024 * 1024)
+                console.print(
+                    f"[green]IP2Location LITE {label} downloaded[/] to {written} "
+                    f"({size_mb:.1f} MB)"
+                )
         else:
-            err.print(
-                f"[yellow]IP2Location LITE DB-ASN not found at {bin_path}[/]\n"
-                f"Register for a free account at https://lite.ip2location.com/, then either:\n"
-                f"  - pass your download token: lodan update --ip2location --token <TOKEN>\n"
-                f"    (or set $LODAN_IP2LOCATION_TOKEN), or\n"
-                f"  - download IP2LOCATION-LITE-ASN.BIN manually and place it at that path."
-            )
-            raise typer.Exit(1)
+            missing = False
+            for label, path, _download in products:
+                if path.exists():
+                    size_mb = path.stat().st_size / (1024 * 1024)
+                    console.print(
+                        f"[green]IP2Location LITE {label} present[/] at {path} "
+                        f"({size_mb:.1f} MB)"
+                    )
+                else:
+                    missing = True
+                    err.print(f"[yellow]IP2Location LITE {label} not found at {path}[/]")
+            if missing:
+                err.print(
+                    "Register for a free account at https://lite.ip2location.com/, then either:\n"
+                    "  - pass your download token: lodan update --ip2location --token <TOKEN>\n"
+                    "    (or set $LODAN_IP2LOCATION_TOKEN), or\n"
+                    "  - download the LITE BIN(s) manually and place them at the paths above."
+                )
+                raise typer.Exit(1)
 
 
 @app.command("scan")
@@ -480,6 +493,28 @@ def prune_cmd(
         f"kept={stats.kept}, {verb}={stats.deleted}, "
         f"non-completed-preserved={stats.skipped_non_completed}"
     )
+
+
+@app.command("favicon-label")
+def favicon_label_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    mmh3: Annotated[int, typer.Argument(help="Favicon mmh3 hash (signed int32).")],
+    label: Annotated[str, typer.Argument(help="Human label, e.g. 'Jenkins login'.")],
+) -> None:
+    """Attach an operator label to a favicon hash for the pivot views."""
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    from lodan.store import writer
+    from lodan.store.db import connect
+
+    conn = connect(workspace_db(workspace))
+    try:
+        writer.set_favicon_label(conn, mmh3, label)
+    finally:
+        conn.close()
+    console.print(f"[green]labeled[/] favicon {mmh3} → {label!r}")
 
 
 def main() -> None:

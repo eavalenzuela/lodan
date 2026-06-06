@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set page_title = "pivot " + kind %}
 {% block content %}
-<h1>Pivot: {{ kind }}</h1>
+<h1>Pivot: {{ kind }}{% if label %} <small class="muted">— {{ label }}</small>{% endif %}</h1>
 <p class="muted">Matching on <code>{{ needle }}</code> across every scan in this workspace.</p>
 {% if kind == "san" %}
 <form class="filters" action="/pivot/san" method="get">
