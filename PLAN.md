@@ -384,9 +384,16 @@ Out of scope inside lodan. Ship a sample `systemd` timer unit under `contrib/` a
 - **Discovery sizing**: no cap — operator picks the port list, including `1-65535`, and owns the workspace size.
 - **Scan retention**: user-configurable via `[retention]` in config; `lodan prune` applies it manually. Never runs automatically. Default (section omitted) = keep everything.
 
-## Open questions (still need your call)
+## Open questions (resolved)
 
-1. **uvt NVD path**: `~/gits/uvt_universal_vuln_tracker/` is a sibling here, but the actual snapshot location inside uvt isn't pinned down. For now lodan owns `~/.lodan/data/nvd/` as the canonical path and uvt can symlink to it; we'll re-document once the uvt side is confirmed.
+1. **uvt NVD path** — *resolved*. Inspecting `~/gits/uvt_universal_vuln_tracker/`
+   confirms uvt keeps **no bulk NVD CPE snapshot file**: it queries the NVD 2.0
+   REST API per-CVE on demand (`backend/services/cve_enrichment.py`) and stores
+   normalized results in its own application DB (`instance/uvt.db`, SQLAlchemy).
+   There is therefore nothing to symlink today. lodan keeps
+   `~/.lodan/data/nvd/cve.db` as the canonical bulk snapshot; if uvt later grows
+   a bulk-feed plugin, the README documents pointing it at that path. See
+   README "uvt NVD snapshot share".
 
 ## Legal / ethics guard
 

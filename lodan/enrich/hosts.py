@@ -1,9 +1,13 @@
 """Host enrichment phase.
 
 After probes land, every distinct IP in `services` becomes one row in the
-`hosts` table, populated with rDNS (if resolvable), ASN (if the local
-IP2Location LITE DB is present), and country (same DB when it carries
-country data).
+`hosts` table, populated with rDNS (if resolvable) and ASN / org (if the
+local IP2Location LITE DB-ASN is present).
+
+The `country` column exists in the schema but is not populated yet: the
+LITE DB-ASN file carries ASN data only, so country would require a
+separate IP2Location DB-Country download. It is written as NULL until
+that lands.
 
 Runs with a bounded semaphore so we don't open 10k PTR lookups at once.
 """
