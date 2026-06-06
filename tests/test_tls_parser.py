@@ -7,11 +7,13 @@ surface before they hit real servers.
 from __future__ import annotations
 
 import hashlib
+import re
 import struct
 
 from lodan.probes.tls_parser import (
     EXT_ALPN,
     EXT_EXTENDED_MASTER_SECRET,
+    EXT_SERVER_NAME,
     EXT_SIGNATURE_ALGORITHMS,
     EXT_SUPPORTED_VERSIONS,
     HS_CERTIFICATE,
@@ -19,6 +21,7 @@ from lodan.probes.tls_parser import (
     TLS_CT_ALERT,
     TLS_CT_CHANGE_CIPHER,
     TLS_CT_HANDSHAKE,
+    ClientHelloBytes,
     build_client_hello,
     collect_handshake_messages,
     extract_cert_chain,
@@ -211,6 +214,108 @@ def test_parse_server_hello_short_raises() -> None:
 
     with pytest.raises(ValueError):
         parse_server_hello(b"\x00" * 10)
+
+
+# ------------------------------------------------------------------
+# JA4 / JA4S
+# ------------------------------------------------------------------
+
+
+def _sha12(s: str) -> str:
+    return hashlib.sha256(s.encode("ascii")).hexdigest()[:12]
+
+
+def test_ja4_overall_shape() -> None:
+    ch = build_client_hello()
+    # ja4_a is human-readable; ja4_b / ja4_c are 12-hex truncated sha256.
+    assert re.fullmatch(r"t\d{2}[di]\d{2}\d{2}.._[0-9a-f]{12}_[0-9a-f]{12}", ch.ja4)
+
+
+def test_ja4_a_encodes_counts_version_sni_alpn() -> None:
+    ch = build_client_hello()
+    ja4_a = ch.ja4.split("_")[0]
+    # TLS over TCP, TLS 1.2 advertised, no SNI -> "i".
+    assert ja4_a.startswith("t12i")
+    # cipher count then extension count, both zero-padded to 2 digits.
+    assert ja4_a[4:6] == f"{len(ch.ciphers):02d}"
+    assert ja4_a[6:8] == f"{len(ch.extensions):02d}"
+    # first ALPN is b"h2" -> first+last char.
+    assert ja4_a[8:10] == "h2"
+
+
+def test_ja4_b_is_sorted_cipher_hash() -> None:
+    ch = build_client_hello()
+    ja4_b = ch.ja4.split("_")[1]
+    expected = _sha12(",".join(f"{c:04x}" for c in sorted(ch.ciphers)))
+    assert ja4_b == expected
+
+
+def test_ja4_c_excludes_sni_alpn_sorts_exts_and_appends_sigalgs() -> None:
+    ch = build_client_hello()
+    ja4_c = ch.ja4.split("_")[2]
+    hash_exts = sorted(e for e in ch.extensions if e not in (EXT_SERVER_NAME, EXT_ALPN))
+    ext_str = ",".join(f"{e:04x}" for e in hash_exts)
+    ext_str += "_" + ",".join(f"{a:04x}" for a in ch.sig_algs)  # sig algs NOT sorted
+    assert ja4_c == _sha12(ext_str)
+
+
+def test_ja4_filters_grease() -> None:
+    # GREASE values (e.g. 0x0a0a) must be dropped from counts and hashes.
+    ch = ClientHelloBytes(
+        record=b"",
+        version=0x0303,
+        ciphers=[0x0a0a, 0x1301, 0x1302],
+        extensions=[0x0a0a, EXT_SUPPORTED_VERSIONS],
+        groups=[],
+        point_formats=[],
+        sig_algs=[0x0403],
+        alpn=[b"h2"],
+        supported_versions=[0x0a0a, 0x0303],
+        has_sni=False,
+    )
+    ja4_a, ja4_b, _ja4_c = ch.ja4.split("_")
+    assert ja4_a == "t12i" + "02" + "01" + "h2"  # 2 ciphers, 1 ext after GREASE
+    assert ja4_b == _sha12("1301,1302")
+
+
+def test_ja4_no_sni_vs_sni_flag() -> None:
+    base = dict(
+        record=b"", version=0x0303, ciphers=[0x1301], extensions=[EXT_SERVER_NAME],
+        groups=[], point_formats=[], sig_algs=[], alpn=[], supported_versions=[0x0303],
+    )
+    with_sni = ClientHelloBytes(**base, has_sni=True)
+    without = ClientHelloBytes(**base, has_sni=False)
+    assert with_sni.ja4.split("_")[0][3] == "d"
+    assert without.ja4.split("_")[0][3] == "i"
+
+
+def test_ja4s_shape_and_components() -> None:
+    body = _fake_server_hello(
+        cipher=0xc02f,
+        extensions=[
+            (EXT_EXTENDED_MASTER_SECRET, b""),
+            (EXT_ALPN, b"\x00\x03\x02h2"),
+        ],
+    )
+    sh = parse_server_hello(body)
+    assert sh.alpn == "h2"
+    ja4s_a, ja4s_b, ja4s_c = sh.ja4s.split("_")
+    # t + version(12) + ext count(02) + alpn(h2)
+    assert ja4s_a == "t1202h2"
+    # single chosen cipher as 4-hex, not hashed.
+    assert ja4s_b == "c02f"
+    # extensions hashed IN ORDER (not sorted).
+    assert ja4s_c == _sha12(f"{EXT_EXTENDED_MASTER_SECRET:04x},{EXT_ALPN:04x}")
+
+
+def test_ja4s_no_alpn_no_extensions() -> None:
+    body = _fake_server_hello(cipher=0x009c, extensions=[])
+    sh = parse_server_hello(body)
+    assert sh.alpn is None
+    ja4s_a, ja4s_b, ja4s_c = sh.ja4s.split("_")
+    assert ja4s_a == "t1200" + "00"  # 0 extensions, no ALPN -> "00"
+    assert ja4s_b == "009c"
+    assert ja4s_c == "000000000000"
 
 
 def test_alert_record_stops_handshake_collection() -> None:

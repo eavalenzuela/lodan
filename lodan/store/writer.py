@@ -92,6 +92,8 @@ def update_service_from_probe(
             cert_sans = COALESCE(?, cert_sans),
             ja3 = COALESCE(?, ja3),
             ja3s = COALESCE(?, ja3s),
+            ja4 = COALESCE(?, ja4),
+            ja4s = COALESCE(?, ja4s),
             favicon_mmh3 = COALESCE(?, favicon_mmh3),
             tech = COALESCE(?, tech),
             raw = COALESCE(?, raw)
@@ -104,6 +106,8 @@ def update_service_from_probe(
             result.sans_json(),
             result.ja3,
             result.ja3s,
+            result.ja4,
+            result.ja4s,
             result.favicon_mmh3,
             result.tech_json(),
             result.raw_json() if result.raw else None,

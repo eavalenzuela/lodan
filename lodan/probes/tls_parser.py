@@ -12,13 +12,15 @@ References:
 - RFC 5246 (TLS 1.2)
 - https://engineering.salesforce.com/tls-fingerprinting-with-ja3-and-ja3s-247362855967
   (original JA3/JA3S spec)
+- https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md
+  (JA4 / JA4S spec)
 """
 from __future__ import annotations
 
 import hashlib
 import secrets
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Content types
 TLS_CT_CHANGE_CIPHER = 20
@@ -57,6 +59,11 @@ class ClientHelloBytes:
     extensions: list[int]     # in order, GREASE-free
     groups: list[int]
     point_formats: list[int]
+    # Extra fields JA4 needs but JA3 doesn't.
+    sig_algs: list[int] = field(default_factory=list)        # signature_algorithms, in order
+    alpn: list[bytes] = field(default_factory=list)          # ALPN protocols advertised, in order
+    supported_versions: list[int] = field(default_factory=list)  # GREASE-free, highest wins
+    has_sni: bool = False                                    # SNI extension present?
 
     @property
     def ja3_string(self) -> str:
@@ -69,12 +76,24 @@ class ClientHelloBytes:
     def ja3(self) -> str:
         return hashlib.md5(self.ja3_string.encode("ascii")).hexdigest()
 
+    @property
+    def ja4(self) -> str:
+        return _ja4_compose(
+            ciphers=self.ciphers,
+            extensions=self.extensions,
+            sig_algs=self.sig_algs,
+            alpn=self.alpn,
+            supported_versions=self.supported_versions or [self.version],
+            has_sni=self.has_sni,
+        )
+
 
 @dataclass(frozen=True)
 class ServerHelloParsed:
     version: int
     cipher: int
     extensions: list[int]     # in order
+    alpn: str | None = None   # protocol the server selected, if any
 
     @property
     def ja3s_string(self) -> str:
@@ -83,6 +102,15 @@ class ServerHelloParsed:
     @property
     def ja3s(self) -> str:
         return hashlib.md5(self.ja3s_string.encode("ascii")).hexdigest()
+
+    @property
+    def ja4s(self) -> str:
+        return _ja4s_compose(
+            version=self.version,
+            cipher=self.cipher,
+            extensions=self.extensions,
+            alpn=self.alpn,
+        )
 
 
 # ----------------------------------------------------------------------
@@ -165,6 +193,10 @@ def build_client_hello() -> ClientHelloBytes:
         extensions=extensions_in_order,
         groups=_SUPPORTED_GROUPS.copy(),
         point_formats=_EC_POINT_FORMATS.copy(),
+        sig_algs=_SIGNATURE_ALGORITHMS.copy(),
+        alpn=[p for p in _ALPN_PROTOCOLS],
+        supported_versions=[0x0303],
+        has_sni=EXT_SERVER_NAME in extensions_in_order,
     )
 
 
@@ -249,6 +281,7 @@ def parse_server_hello(body: bytes) -> ServerHelloParsed:
 
     extensions: list[int] = []
     negotiated_version = version
+    alpn: str | None = None
     while pos + 4 <= end:
         ext_type, ext_len = struct.unpack_from(">HH", body, pos)
         pos += 4
@@ -259,9 +292,29 @@ def parse_server_hello(body: bytes) -> ServerHelloParsed:
         # even though legacy_version is pinned to 0x0303 in TLS 1.3.
         if ext_type == EXT_SUPPORTED_VERSIONS and len(ext_data) >= 2:
             negotiated_version = struct.unpack(">H", ext_data[:2])[0]
+        elif ext_type == EXT_ALPN:
+            alpn = _parse_alpn_selection(ext_data)
     return ServerHelloParsed(
-        version=negotiated_version, cipher=cipher, extensions=extensions,
+        version=negotiated_version, cipher=cipher, extensions=extensions, alpn=alpn,
     )
+
+
+def _parse_alpn_selection(ext_data: bytes) -> str | None:
+    """Pull the single protocol name out of a ServerHello ALPN extension.
+
+    Layout: uint16 list_length, then uint8 name_length + name. The server
+    selects exactly one protocol, so we only need the first entry.
+    """
+    if len(ext_data) < 3:
+        return None
+    name_len = ext_data[2]
+    name = ext_data[3 : 3 + name_len]
+    if len(name) != name_len or not name:
+        return None
+    try:
+        return name.decode("ascii")
+    except UnicodeDecodeError:
+        return None
 
 
 def extract_cert_chain(messages: list[tuple[int, bytes]]) -> list[bytes]:
@@ -325,6 +378,100 @@ def _ja3_compose(
 def _ja3s_compose(version: int, cipher: int, extensions: list[int]) -> str:
     ext_str = "-".join(str(v) for v in extensions)
     return f"{version},{cipher},{ext_str}"
+
+
+# ----------------------------------------------------------------------
+# JA4 / JA4S composition (FoxIO spec)
+# ----------------------------------------------------------------------
+
+# JA4 encodes the TLS version as a 2-char code rather than the raw number.
+_JA4_VERSION_CODES = {
+    0x0304: "13",
+    0x0303: "12",
+    0x0302: "11",
+    0x0301: "10",
+    0x0300: "s3",
+    0x0002: "s2",
+}
+
+# Extensions excluded from the JA4_c hash list (still counted in JA4_a).
+_JA4_IGNORED_EXTENSIONS = frozenset({EXT_SERVER_NAME, EXT_ALPN})
+
+
+def _ja4_version_code(version: int) -> str:
+    return _JA4_VERSION_CODES.get(version, "00")
+
+
+def _ja4_alpn_code(alpn: bytes | str | None) -> str:
+    """First+last char of the (first) ALPN value, or '00' if none."""
+    if not alpn:
+        return "00"
+    s = alpn.decode("ascii", "replace") if isinstance(alpn, bytes) else alpn
+    if not s:
+        return "00"
+    return f"{s[0]}{s[-1]}"
+
+
+def _sha12(s: str) -> str:
+    return hashlib.sha256(s.encode("ascii")).hexdigest()[:12]
+
+
+def _ja4_compose(
+    *,
+    ciphers: list[int],
+    extensions: list[int],
+    sig_algs: list[int],
+    alpn: list[bytes],
+    supported_versions: list[int],
+    has_sni: bool,
+) -> str:
+    ciphers = [c for c in ciphers if c not in _GREASE]
+    exts = [e for e in extensions if e not in _GREASE]
+    versions = [v for v in supported_versions if v not in _GREASE]
+    highest = max(versions) if versions else 0
+
+    ja4_a = "".join([
+        "t",                                       # TLS over TCP
+        _ja4_version_code(highest),
+        "d" if has_sni else "i",
+        f"{min(len(ciphers), 99):02d}",
+        f"{min(len(exts), 99):02d}",
+        _ja4_alpn_code(alpn[0] if alpn else None),
+    ])
+
+    ja4_b = _sha12(",".join(f"{c:04x}" for c in sorted(ciphers))) if ciphers else "000000000000"
+
+    hash_exts = sorted(e for e in exts if e not in _JA4_IGNORED_EXTENSIONS)
+    sigs = [a for a in sig_algs if a not in _GREASE]
+    if not hash_exts and not sigs:
+        ja4_c = "000000000000"
+    else:
+        ext_str = ",".join(f"{e:04x}" for e in hash_exts)
+        if sigs:
+            ext_str = f"{ext_str}_" + ",".join(f"{a:04x}" for a in sigs)
+        ja4_c = _sha12(ext_str)
+
+    return f"{ja4_a}_{ja4_b}_{ja4_c}"
+
+
+def _ja4s_compose(
+    *,
+    version: int,
+    cipher: int,
+    extensions: list[int],
+    alpn: str | None,
+) -> str:
+    exts = [e for e in extensions if e not in _GREASE]
+    ja4s_a = "".join([
+        "t",
+        _ja4_version_code(version),
+        f"{min(len(exts), 99):02d}",
+        _ja4_alpn_code(alpn),
+    ])
+    ja4s_b = f"{cipher:04x}"
+    # Server-hello extensions are hashed in order — not sorted, unlike JA4_c.
+    ja4s_c = _sha12(",".join(f"{e:04x}" for e in exts)) if exts else "000000000000"
+    return f"{ja4s_a}_{ja4s_b}_{ja4s_c}"
 
 
 # ----------------------------------------------------------------------

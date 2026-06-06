@@ -16,11 +16,30 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+# Columns added to `services` after the initial schema shipped. Applied to
+# pre-existing workspace DBs before schema.sql runs, so the matching indices
+# (e.g. services_ja4s) don't reference a column that isn't there yet.
+_SERVICES_COLUMN_MIGRATIONS = (
+    ("ja4", "TEXT"),
+    ("ja4s", "TEXT"),
+)
+
+
+def _migrate_services_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(services)")}
+    if not existing:
+        return  # fresh DB — schema.sql creates `services` with every column
+    for name, col_type in _SERVICES_COLUMN_MIGRATIONS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE services ADD COLUMN {name} {col_type}")
+
+
 def bootstrap(path: Path) -> None:
     """Create the DB file and apply schema.sql. Safe to run on an existing DB."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(path)
     try:
+        _migrate_services_columns(conn)
         conn.executescript(schema_sql())
     finally:
         conn.close()

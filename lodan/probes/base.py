@@ -19,6 +19,8 @@ class ProbeResult:
     cert_sans: list[str] | None = None
     ja3: str | None = None
     ja3s: str | None = None
+    ja4: str | None = None
+    ja4s: str | None = None
     favicon_mmh3: int | None = None
     tech: list[str] | None = None
     raw: dict[str, Any] = field(default_factory=dict)

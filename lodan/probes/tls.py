@@ -104,7 +104,8 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
             service="tls",
             banner="tls: no ServerHello",
             ja3=ch.ja3,
-            raw={"response_bytes": len(raw), "ja3_string": ch.ja3_string},
+            ja4=ch.ja4,
+            raw={"response_bytes": len(raw), "ja3_string": ch.ja3_string, "ja4": ch.ja4},
         )
     sh = parse_server_hello(sh_body)
     chain = extract_cert_chain(messages)
@@ -138,6 +139,9 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
         "cipher": sh.cipher,
         "ja3_string": ch.ja3_string,
         "ja3s_string": sh.ja3s_string,
+        "ja4": ch.ja4,
+        "ja4s": sh.ja4s,
+        "alpn": sh.alpn,
         "server_extensions": sh.extensions,
         "cert_count": len(chain),
     }
@@ -157,6 +161,8 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
         cert_sans=sans,
         ja3=ch.ja3,
         ja3s=sh.ja3s,
+        ja4=ch.ja4,
+        ja4s=sh.ja4s,
         raw=raw_fields,
     )
 

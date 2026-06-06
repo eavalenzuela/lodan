@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS services (
   cert_sans TEXT,                 -- JSON array
   ja3 TEXT,
   ja3s TEXT,
+  ja4 TEXT,
+  ja4s TEXT,
   favicon_mmh3 INTEGER,
   tech TEXT,                      -- JSON array
   raw BLOB,                       -- JSON blob, probe-specific
@@ -46,6 +48,7 @@ CREATE INDEX IF NOT EXISTS services_ip_port ON services(ip, port);
 CREATE INDEX IF NOT EXISTS services_cert_fp ON services(cert_fingerprint);
 CREATE INDEX IF NOT EXISTS services_favicon ON services(favicon_mmh3);
 CREATE INDEX IF NOT EXISTS services_ja3s    ON services(ja3s);
+CREATE INDEX IF NOT EXISTS services_ja4s    ON services(ja4s);
 
 CREATE TABLE IF NOT EXISTS vulns (
   scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
