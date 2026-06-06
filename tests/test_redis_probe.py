@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lodan.probes.redis import RedisProbe, parse_info
+from lodan.probes.redis import RedisProbe, _resp_complete, parse_info
 
 _VALID_INFO = (
     b"$320\r\n"
@@ -53,3 +53,21 @@ def test_parse_malformed_bulk_header() -> None:
 def test_default_ports() -> None:
     assert 6379 in RedisProbe().default_ports
     assert 6380 in RedisProbe().default_ports
+
+
+def test_resp_complete_bulk_string() -> None:
+    # Partial bulk (payload not fully arrived) is not yet complete.
+    assert not _resp_complete(b"$10\r\nhalf")
+    assert not _resp_complete(b"$10\r\n0123456789")        # missing trailing CRLF
+    assert _resp_complete(b"$10\r\n0123456789\r\n")
+    # A correctly-framed bulk reply whose declared length matches its payload.
+    body = b"# Server\r\nredis_version:7.0.12\r\n"
+    assert _resp_complete(b"$%d\r\n%s\r\n" % (len(body), body))
+
+
+def test_resp_complete_null_bulk_and_lines() -> None:
+    assert _resp_complete(b"$-1\r\n")                       # null bulk
+    assert _resp_complete(b"-NOAUTH Authentication required.\r\n")
+    assert _resp_complete(b"+PONG\r\n")
+    assert not _resp_complete(b"-NOAUTH partial")           # no CRLF yet
+    assert not _resp_complete(b"$")                         # header not arrived

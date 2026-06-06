@@ -44,18 +44,47 @@ async def fetch(ip: str, port: int) -> bytes:
     try:
         writer.write(b"*1\r\n$4\r\nINFO\r\n")
         await writer.drain()
-        # INFO reply caps out a few KB. Read until EOF or 64 KB.
+        # A real Redis keeps the connection open after replying, so reading
+        # until EOF would block until our timeout. Stop as soon as we have a
+        # complete RESP reply (or hit the 64 KB cap / EOF).
         buf = b""
         while len(buf) < 65536:
             chunk = await reader.read(4096)
             if not chunk:
                 break
             buf += chunk
+            if _resp_complete(buf):
+                break
         return buf
     finally:
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
+
+
+def _resp_complete(buf: bytes) -> bool:
+    """True once `buf` holds a complete top-level RESP reply to INFO.
+
+    We only need the three reply shapes INFO can produce: a bulk string
+    (`$<len>\\r\\n<payload>\\r\\n`), a null bulk (`$-1\\r\\n`), or a simple
+    error/status line (`-...\\r\\n` / `+...\\r\\n`).
+    """
+    if buf[:1] in (b"-", b"+"):
+        return b"\r\n" in buf
+    if buf[:1] == b"$":
+        end = buf.find(b"\r\n")
+        if end == -1:
+            return False
+        try:
+            length = int(buf[1:end])
+        except ValueError:
+            return True  # malformed header; let the parser deal with it
+        if length < 0:
+            return True  # null bulk
+        # header + CRLF + payload + trailing CRLF
+        return len(buf) >= end + 2 + length + 2
+    # Unknown reply type — wait for at least one line so the parser sees it.
+    return b"\r\n" in buf
 
 
 def parse_info(raw: bytes) -> ProbeResult:
