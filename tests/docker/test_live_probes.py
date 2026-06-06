@@ -45,6 +45,9 @@ def test_tls_cert_and_fingerprints(docker_stack) -> None:
     assert res.ja4 and res.ja4s
     assert res.ja4.startswith("t12")      # we advertise TLS 1.2
     assert res.ja4s.startswith("t")
+    # Raw (unhashed) forms are captured in the probe's raw blob.
+    assert res.raw["ja4_r"].startswith(res.ja4.split("_")[0] + "_")
+    assert res.raw["ja4s_r"].startswith(res.ja4s.split("_")[0] + "_")
 
 
 def test_redis_unauth_info(docker_stack) -> None:

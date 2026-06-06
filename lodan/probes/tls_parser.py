@@ -21,6 +21,7 @@ import hashlib
 import secrets
 import struct
 from dataclasses import dataclass, field
+from typing import Any
 
 # Content types
 TLS_CT_CHANGE_CIPHER = 20
@@ -76,16 +77,25 @@ class ClientHelloBytes:
     def ja3(self) -> str:
         return hashlib.md5(self.ja3_string.encode("ascii")).hexdigest()
 
+    def _ja4_kwargs(self) -> dict[str, Any]:
+        return {
+            "ciphers": self.ciphers,
+            "extensions": self.extensions,
+            "sig_algs": self.sig_algs,
+            "alpn": self.alpn,
+            "supported_versions": self.supported_versions or [self.version],
+            "has_sni": self.has_sni,
+        }
+
     @property
     def ja4(self) -> str:
-        return _ja4_compose(
-            ciphers=self.ciphers,
-            extensions=self.extensions,
-            sig_algs=self.sig_algs,
-            alpn=self.alpn,
-            supported_versions=self.supported_versions or [self.version],
-            has_sni=self.has_sni,
-        )
+        return _ja4_compose(**self._ja4_kwargs())
+
+    @property
+    def ja4_r(self) -> str:
+        """Unhashed JA4: same fields as ja4 but cipher/extension lists shown
+        verbatim instead of sha256-truncated. Useful for diffing."""
+        return _ja4_compose_raw(**self._ja4_kwargs())
 
 
 @dataclass(frozen=True)
@@ -103,14 +113,22 @@ class ServerHelloParsed:
     def ja3s(self) -> str:
         return hashlib.md5(self.ja3s_string.encode("ascii")).hexdigest()
 
+    def _ja4s_kwargs(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "cipher": self.cipher,
+            "extensions": self.extensions,
+            "alpn": self.alpn,
+        }
+
     @property
     def ja4s(self) -> str:
-        return _ja4s_compose(
-            version=self.version,
-            cipher=self.cipher,
-            extensions=self.extensions,
-            alpn=self.alpn,
-        )
+        return _ja4s_compose(**self._ja4s_kwargs())
+
+    @property
+    def ja4s_r(self) -> str:
+        """Unhashed JA4S: server-hello extension list shown verbatim."""
+        return _ja4s_compose_raw(**self._ja4s_kwargs())
 
 
 # ----------------------------------------------------------------------
@@ -416,7 +434,7 @@ def _sha12(s: str) -> str:
     return hashlib.sha256(s.encode("ascii")).hexdigest()[:12]
 
 
-def _ja4_compose(
+def _ja4_parts(
     *,
     ciphers: list[int],
     extensions: list[int],
@@ -424,7 +442,14 @@ def _ja4_compose(
     alpn: list[bytes],
     supported_versions: list[int],
     has_sni: bool,
-) -> str:
+) -> tuple[str, str, str]:
+    """Build the three JA4 fields once: (a, cipher_raw, ext_raw).
+
+    `cipher_raw` is the sorted cipher hex list and `ext_raw` the sorted
+    extension hex list (+ "_" + signature algorithms) — i.e. exactly the
+    strings hashed for JA4_b / JA4_c. The hashed JA4 and the raw JA4_r both
+    derive from these, so the GREASE/sort/exclusion rules live in one place.
+    """
     ciphers = [c for c in ciphers if c not in _GREASE]
     exts = [e for e in extensions if e not in _GREASE]
     versions = [v for v in supported_versions if v not in _GREASE]
@@ -439,28 +464,38 @@ def _ja4_compose(
         _ja4_alpn_code(alpn[0] if alpn else None),
     ])
 
-    ja4_b = _sha12(",".join(f"{c:04x}" for c in sorted(ciphers))) if ciphers else "000000000000"
+    cipher_raw = ",".join(f"{c:04x}" for c in sorted(ciphers))
 
     hash_exts = sorted(e for e in exts if e not in _JA4_IGNORED_EXTENSIONS)
     sigs = [a for a in sig_algs if a not in _GREASE]
-    if not hash_exts and not sigs:
-        ja4_c = "000000000000"
-    else:
-        ext_str = ",".join(f"{e:04x}" for e in hash_exts)
-        if sigs:
-            ext_str = f"{ext_str}_" + ",".join(f"{a:04x}" for a in sigs)
-        ja4_c = _sha12(ext_str)
+    ext_raw = ",".join(f"{e:04x}" for e in hash_exts)
+    if sigs:
+        ext_raw = f"{ext_raw}_" + ",".join(f"{a:04x}" for a in sigs)
 
+    return ja4_a, cipher_raw, ext_raw
+
+
+def _ja4_compose(**kwargs: Any) -> str:
+    ja4_a, cipher_raw, ext_raw = _ja4_parts(**kwargs)
+    ja4_b = _sha12(cipher_raw) if cipher_raw else "000000000000"
+    ja4_c = _sha12(ext_raw) if ext_raw else "000000000000"
     return f"{ja4_a}_{ja4_b}_{ja4_c}"
 
 
-def _ja4s_compose(
+def _ja4_compose_raw(**kwargs: Any) -> str:
+    ja4_a, cipher_raw, ext_raw = _ja4_parts(**kwargs)
+    return f"{ja4_a}_{cipher_raw}_{ext_raw}"
+
+
+def _ja4s_parts(
     *,
     version: int,
     cipher: int,
     extensions: list[int],
     alpn: str | None,
-) -> str:
+) -> tuple[str, str, str]:
+    """(a, cipher_hex, ext_raw) for JA4S. Server-hello extensions stay in the
+    order they arrived — not sorted, unlike JA4_c."""
     exts = [e for e in extensions if e not in _GREASE]
     ja4s_a = "".join([
         "t",
@@ -469,9 +504,19 @@ def _ja4s_compose(
         _ja4_alpn_code(alpn),
     ])
     ja4s_b = f"{cipher:04x}"
-    # Server-hello extensions are hashed in order — not sorted, unlike JA4_c.
-    ja4s_c = _sha12(",".join(f"{e:04x}" for e in exts)) if exts else "000000000000"
+    ext_raw = ",".join(f"{e:04x}" for e in exts)
+    return ja4s_a, ja4s_b, ext_raw
+
+
+def _ja4s_compose(**kwargs: Any) -> str:
+    ja4s_a, ja4s_b, ext_raw = _ja4s_parts(**kwargs)
+    ja4s_c = _sha12(ext_raw) if ext_raw else "000000000000"
     return f"{ja4s_a}_{ja4s_b}_{ja4s_c}"
+
+
+def _ja4s_compose_raw(**kwargs: Any) -> str:
+    ja4s_a, ja4s_b, ext_raw = _ja4s_parts(**kwargs)
+    return f"{ja4s_a}_{ja4s_b}_{ext_raw}"
 
 
 # ----------------------------------------------------------------------

@@ -308,6 +308,33 @@ def test_ja4s_shape_and_components() -> None:
     assert ja4s_c == _sha12(f"{EXT_EXTENDED_MASTER_SECRET:04x},{EXT_ALPN:04x}")
 
 
+def test_ja4_r_is_unhashed_form_of_ja4() -> None:
+    ch = build_client_hello()
+    a, b, c = ch.ja4.split("_")
+    # ja4_r's ext segment contains an internal "_" (exts_sigalgs), so split
+    # yields [a, cipher_raw, ext_raw, sigalg_raw].
+    ra, cipher_raw, *ext_parts = ch.ja4_r.split("_")
+    ext_raw = "_".join(ext_parts)
+    assert ra == a                          # ja4_a is identical
+    assert _sha12(cipher_raw) == b          # hashing cipher_raw reproduces ja4_b
+    assert _sha12(ext_raw) == c             # hashing ext_raw reproduces ja4_c
+    # The raw cipher list is sorted, lowercase, 4-hex.
+    assert cipher_raw == ",".join(f"{x:04x}" for x in sorted(ch.ciphers))
+
+
+def test_ja4s_r_is_unhashed_form_of_ja4s() -> None:
+    body = _fake_server_hello(
+        cipher=0xc02f,
+        extensions=[(EXT_EXTENDED_MASTER_SECRET, b""), (EXT_ALPN, b"\x00\x03\x02h2")],
+    )
+    sh = parse_server_hello(body)
+    a, b, c = sh.ja4s.split("_")
+    ra, rb, ext_raw = sh.ja4s_r.split("_")
+    assert (ra, rb) == (a, b)               # a and the single cipher are unchanged
+    assert _sha12(ext_raw) == c             # hashing the raw ext list reproduces ja4s_c
+    assert ext_raw == f"{EXT_EXTENDED_MASTER_SECRET:04x},{EXT_ALPN:04x}"
+
+
 def test_ja4s_no_alpn_no_extensions() -> None:
     body = _fake_server_hello(cipher=0x009c, extensions=[])
     sh = parse_server_hello(body)

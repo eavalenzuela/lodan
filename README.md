@@ -189,9 +189,6 @@ lodan never reads from uvt, so the link is always lodan → uvt.
 
 ## Known deferred items
 
-- **JA4 raw (`ja4_r`) variant** — lodan computes the hashed JA4 / JA4S
-  fingerprints. The unhashed "raw" form is a small add-on on the same
-  parser if a use case appears.
 - **IP2Location LITE IPv6** — `lodan update --ip2location --token <T>`
   fetches the IPv4 LITE DB-ASN (`DBASNLITEBIN`). The IPv6 variant isn't
   wired since v1 is IPv4-only.
