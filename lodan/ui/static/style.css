@@ -71,3 +71,5 @@ footer {
 }
 
 code { background: #222; padding: 0.15rem 0.4rem; border-radius: 3px; }
+
+td.fp a { margin-right: 0.5rem; font-size: 0.85em; }

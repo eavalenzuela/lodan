@@ -43,13 +43,13 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     )
     conn.executemany(
         "INSERT INTO services (scan_id, ip, port, proto, service, banner, "
-        "cert_fingerprint, cert_sans, favicon_mmh3, ja3s) "
-        "VALUES (?, ?, ?, 'tcp', ?, ?, ?, ?, ?, ?)",
+        "cert_fingerprint, cert_sans, favicon_mmh3, ja3s, ja4s) "
+        "VALUES (?, ?, ?, 'tcp', ?, ?, ?, ?, ?, ?, ?)",
         [
-            (1, "10.0.0.5", 443, "tls", "Apache", "aa" * 32, '["example.corp","*.corp.example.com"]', 12345, "ja3s-1"),
-            (1, "10.0.0.9", 443, "tls", "nginx",  "bb" * 32, '["other.example"]', 99999, "ja3s-2"),
-            (2, "10.0.0.5", 443, "tls", "Apache", "aa" * 32, '["example.corp","*.corp.example.com"]', 12345, "ja3s-1"),
-            (2, "10.0.0.11", 443, "tls", "caddy", "cc" * 32, '["*.corp.example.com"]', 12345, "ja3s-1"),
+            (1, "10.0.0.5", 443, "tls", "Apache", "aa" * 32, '["example.corp","*.corp.example.com"]', 12345, "ja3s-1", "t1203h2_aaaa_bbbb"),
+            (1, "10.0.0.9", 443, "tls", "nginx",  "bb" * 32, '["other.example"]', 99999, "ja3s-2", "t1203h2_cccc_dddd"),
+            (2, "10.0.0.5", 443, "tls", "Apache", "aa" * 32, '["example.corp","*.corp.example.com"]', 12345, "ja3s-1", "t1203h2_aaaa_bbbb"),
+            (2, "10.0.0.11", 443, "tls", "caddy", "cc" * 32, '["*.corp.example.com"]', 12345, "ja3s-1", "t1203h2_aaaa_bbbb"),
         ],
     )
     conn.commit()
@@ -90,6 +90,21 @@ def test_pivot_ja3s(workspace: str) -> None:
     assert "10.0.0.5" in body
     assert "10.0.0.11" in body
     assert "10.0.0.9" not in body
+
+
+def test_pivot_ja4s(workspace: str) -> None:
+    client = _client(workspace)
+    body = client.get("/pivot/ja4s/t1203h2_aaaa_bbbb").text
+    assert "10.0.0.5" in body
+    assert "10.0.0.11" in body
+    assert "10.0.0.9" not in body
+
+
+def test_services_table_renders_fingerprint_pivot_links(workspace: str) -> None:
+    client = _client(workspace)
+    body = client.get("/services", params={"scan": 1}).text
+    assert '/pivot/ja3s/ja3s-1' in body
+    assert '/pivot/ja4s/t1203h2_aaaa_bbbb' in body
 
 
 def test_pivot_san_wildcard(workspace: str) -> None:

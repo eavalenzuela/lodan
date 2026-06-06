@@ -6,11 +6,15 @@
     <td>{{ s.service or "" }}</td>
     <td class="banner">{{ s.banner or "" }}</td>
     <td>{% if s.cert_fingerprint %}<a href="/pivot/cert/{{ s.cert_fingerprint }}" title="pivot on this cert">{{ s.cert_fingerprint | short_fp }}</a>{% endif %}</td>
+    <td class="fp">
+      {% if s.ja3s %}<a href="/pivot/ja3s/{{ s.ja3s }}" title="{{ s.ja3s }}">ja3s</a>{% endif %}
+      {% if s.ja4s %}<a href="/pivot/ja4s/{{ s.ja4s }}" title="{{ s.ja4s }}">ja4s</a>{% endif %}
+    </td>
     <td>
       {% set tech = s.tech | from_json %}
       {% if tech %}{{ tech | join(", ") }}{% endif %}
     </td>
   </tr>
 {% else %}
-  <tr><td colspan="7" class="muted">no services match</td></tr>
+  <tr><td colspan="8" class="muted">no services match</td></tr>
 {% endfor %}
