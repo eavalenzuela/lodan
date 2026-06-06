@@ -101,8 +101,20 @@ def init_cmd(
 def update_cmd(
     cves: Annotated[bool, typer.Option("--cves", help="Refresh the NVD 2.0 CVE snapshot.")] = False,
     ip2location: Annotated[
-        bool, typer.Option("--ip2location", help="Check the IP2Location LITE DB status.")
+        bool,
+        typer.Option(
+            "--ip2location",
+            help="Download (with --token) or check the IP2Location LITE DB.",
+        ),
     ] = False,
+    token: Annotated[
+        str | None,
+        typer.Option(
+            "--token",
+            help="IP2Location LITE account token; enables auto-download. "
+            "Falls back to $LODAN_IP2LOCATION_TOKEN.",
+        ),
+    ] = None,
     max_pages: Annotated[
         int | None,
         typer.Option("--max-pages", help="Cap pages for a quick refresh."),
@@ -134,11 +146,32 @@ def update_cmd(
         )
 
     if ip2location:
-        from lodan.paths import ip2location_asn_bin, ip2location_dir
+        import asyncio
+
+        from lodan.enrich.ip2location_data import (
+            IP2LocationDownloadError,
+            bootstrap_dirs,
+            download_asn,
+            token_from_env,
+        )
+        from lodan.paths import ip2location_asn_bin
 
         bin_path = ip2location_asn_bin()
-        ip2location_dir().mkdir(parents=True, exist_ok=True)
-        if bin_path.exists():
+        bootstrap_dirs()
+        tok = token or token_from_env()
+
+        if tok:
+            console.print(f"Downloading IP2Location LITE DB-ASN to {bin_path} …")
+            try:
+                written = asyncio.run(download_asn(tok))
+            except IP2LocationDownloadError as e:
+                err.print(f"[red]IP2Location download failed[/]: {e}")
+                raise typer.Exit(1) from e
+            size_mb = written.stat().st_size / (1024 * 1024)
+            console.print(
+                f"[green]IP2Location LITE DB-ASN downloaded[/] to {written} ({size_mb:.1f} MB)"
+            )
+        elif bin_path.exists():
             size_mb = bin_path.stat().st_size / (1024 * 1024)
             console.print(
                 f"[green]IP2Location LITE DB-ASN present[/] at {bin_path} ({size_mb:.1f} MB)"
@@ -146,9 +179,10 @@ def update_cmd(
         else:
             err.print(
                 f"[yellow]IP2Location LITE DB-ASN not found at {bin_path}[/]\n"
-                f"Register for a free account at https://lite.ip2location.com/, "
-                f"download IP2LOCATION-LITE-ASN.BIN, and place it at that path. "
-                f"Automated download lands in a later commit."
+                f"Register for a free account at https://lite.ip2location.com/, then either:\n"
+                f"  - pass your download token: lodan update --ip2location --token <TOKEN>\n"
+                f"    (or set $LODAN_IP2LOCATION_TOKEN), or\n"
+                f"  - download IP2LOCATION-LITE-ASN.BIN manually and place it at that path."
             )
             raise typer.Exit(1)
 
