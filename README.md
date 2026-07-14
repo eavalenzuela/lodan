@@ -30,6 +30,15 @@ end-to-end:
   hosts / services tables with filtering, pivot views
   (cert / favicon / JA3S / JA4S / SSH host-key / SAN), operator-labelled
   favicons, diff timeline + detail, DSL query box.
+- In-browser management (`/manage`): add/remove authorized ranges, edit
+  scan + enrichment + retention settings, set the cloud-provider policy,
+  label favicons, and launch a scan with live status — all sharing the same
+  authz guards as the CLI. Gate it off with `serve --read-only` to hand a
+  viewer a browse-only instance.
+
+See [SCANNING_FEATURES.md](SCANNING_FEATURES.md) for the next round of
+core-scanning capabilities on the roadmap (passive stack fingerprinting,
+TLS/SSH crypto-posture audits, UDP probe fleet, exposure findings, …).
 
 ## Install
 
@@ -77,8 +86,9 @@ lodan diff home-lab                  # prev -> latest by default
 lodan diff home-lab --from 3 --to 7
 lodan diff home-lab --from 2026-04-17 --to latest
 
-# Browse.
+# Browse + manage (add ranges, tweak settings, launch scans at /manage).
 lodan serve home-lab                 # http://127.0.0.1:8765
+lodan serve home-lab --read-only     # browse-only; management disabled
 
 # Export and prune.
 lodan export home-lab --include services,hosts --output scan.jsonl
@@ -95,7 +105,7 @@ lodan prune home-lab --dry-run
 | `lodan scan <ws>`               | discover + probe + enrich + auto-diff |
 | `lodan query <ws> "expr"`       | run a mini-DSL query; `--json` for JSONL |
 | `lodan diff <ws>`               | scan-to-scan diff; `--from`/`--to` accept id / `prev` / `latest` / ISO date |
-| `lodan serve <ws>`              | FastAPI UI; localhost-only unless `--auth-token` |
+| `lodan serve <ws>`              | FastAPI UI + management; localhost-only unless `--auth-token`; `--read-only` for a browse-only instance |
 | `lodan export <ws>`             | JSONL or JSON array dump; `--include`, `--scan`, `--output` |
 | `lodan prune <ws>`              | apply `[retention]` from config; `--dry-run` |
 | `lodan favicon-label <ws> <mmh3> "<label>"` | tag a favicon hash for the pivot views |
@@ -168,6 +178,21 @@ Every probe is strictly detection-only:
 The web UI binds to `127.0.0.1` by default. Non-loopback binds require
 `--auth-token`, which the UI then checks against the `X-Lodan-Token`
 header on every request.
+
+The management endpoints (add/remove scope, edit settings, launch a scan,
+label favicons) sit behind the same posture, plus two guards of their own:
+
+- **Read-only mode.** `lodan serve <ws> --read-only` disables every mutation
+  endpoint (they return `403`) and hides the write forms, so a workspace can
+  be shared browse-only.
+- **Host-pinned writes.** On the default loopback bind, mutation requests must
+  carry a loopback `Host` header (and any `Origin` must match), so a malicious
+  page — even one using DNS rebinding to `127.0.0.1` — can't drive a scan or
+  edit scope through your browser. Non-loopback binds rely on `--auth-token`
+  instead, which gates every request.
+- **Authz still owns scanning.** Adding a range only edits `authorized_ranges`;
+  the cloud-prefix guard and the per-target allowlist still run at scan time,
+  so nothing added through the UI is scanned unless it also clears authz.
 
 ## uvt NVD snapshot share
 

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% set page_title = "dashboard" %}
 {% block content %}
+{% include "_scan_control.html" %}
 <section class="summary">
   <h1>Dashboard</h1>
   {% if summary.latest %}

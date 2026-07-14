@@ -13,6 +13,11 @@ def schema_sql() -> str:
 def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets the UI read while a scan writes, but only one writer holds the
+    # lock at a time. Wait for it instead of erroring immediately with
+    # SQLITE_BUSY — the web UI can now issue writes (favicon labels) that may
+    # coincide with a background scan.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

@@ -6,6 +6,7 @@ operators can hand-edit without a lodan binary.
 """
 from __future__ import annotations
 
+import json
 import tomllib
 from ipaddress import ip_network
 from pathlib import Path
@@ -72,40 +73,90 @@ class Config(BaseModel):
         with path.open("rb") as f:
             return cls.model_validate(tomllib.load(f))
 
+    def dump(self) -> str:
+        """Render this config back to canonical TOML.
+
+        Used by the management layer to persist edits (add a CIDR, flip an
+        enrich toggle, ...) without a round-trip TOML library. Any hand-written
+        operator comments are not preserved; the layout and inline hints below
+        are regenerated deterministically so the file always re-parses.
+        """
+        return dump_config_toml(self)
+
+
+def _toml_str(s: str) -> str:
+    # A JSON string literal is a valid TOML basic string: quotes, backslashes,
+    # and control chars (<0x20) escape identically. We keep non-ASCII literal
+    # (ensure_ascii=False) because TOML basic strings hold raw UTF-8 and json's
+    # default \uXXXX escaping emits surrogate pairs for astral chars (emoji,
+    # CJK-ExtB) that tomllib rejects as non-scalar. Dependency-free.
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _toml_bool(b: bool) -> str:
+    return "true" if b else "false"
+
+
+def _toml_num(n: float | int) -> str:
+    # Emit whole floats as integers (probe_timeout_s = 5, not 5.0) for a cleaner
+    # file; either form parses back to the same pydantic value.
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return str(n)
+
+
+def dump_config_toml(cfg: Config) -> str:
+    ws = cfg.workspace
+    scan = cfg.scan
+    enrich = cfg.enrich
+    ranges_fmt = ", ".join(_toml_str(c) for c in ws.authorized_ranges)
+
+    lines = [
+        "[workspace]",
+        f"name = {_toml_str(ws.name)}",
+        f"authorized_ranges = [{ranges_fmt}]",
+        f"cloud_provider_allowed = {_toml_bool(ws.cloud_provider_allowed)}",
+        f"cloud_provider_justification = {_toml_str(ws.cloud_provider_justification)}",
+        "",
+        "[scan]",
+        f'backend = {_toml_str(scan.backend)}'
+        '                      # "auto" | "masscan" | "naabu" | "scapy"',
+        f"rate_pps = {_toml_num(scan.rate_pps)}",
+        f"ports = {_toml_str(scan.ports)}",
+        f"tcp = {_toml_bool(scan.tcp)}",
+        f"udp = {_toml_bool(scan.udp)}",
+        f"concurrency = {_toml_num(scan.concurrency)}",
+        f"per_host_concurrency = {_toml_num(scan.per_host_concurrency)}",
+        f"probe_timeout_s = {_toml_num(scan.probe_timeout_s)}",
+        f"retries = {_toml_num(scan.retries)}",
+        "",
+        "[enrich]",
+        f"rdns = {_toml_bool(enrich.rdns)}",
+        f"asn = {_toml_bool(enrich.asn)}",
+        f"geoip = {_toml_bool(enrich.geoip)}",
+        f"cve = {_toml_bool(enrich.cve)}",
+        f"favicon = {_toml_bool(enrich.favicon)}",
+        f"tech = {_toml_bool(enrich.tech)}",
+        f"keep_raw = {_toml_bool(enrich.keep_raw)}",
+        "",
+        "[diff]",
+        f"default_from = {_toml_str(cfg.diff.default_from)}",
+        "",
+    ]
+
+    ret = cfg.retention
+    if ret.keep_last_n is None and ret.keep_monthly is None:
+        lines += ["# [retention]", "# keep_last_n = 24", "# keep_monthly = 12"]
+    else:
+        lines.append("[retention]")
+        if ret.keep_last_n is not None:
+            lines.append(f"keep_last_n = {ret.keep_last_n}")
+        if ret.keep_monthly is not None:
+            lines.append(f"keep_monthly = {ret.keep_monthly}")
+
+    return "\n".join(lines) + "\n"
+
 
 def default_config_toml(name: str, cidrs: list[str]) -> str:
-    cidrs_fmt = ", ".join(f'"{c}"' for c in cidrs)
-    return f"""\
-[workspace]
-name = "{name}"
-authorized_ranges = [{cidrs_fmt}]
-cloud_provider_allowed = false
-cloud_provider_justification = ""
-
-[scan]
-backend = "auto"                      # "auto" | "masscan" | "naabu" | "scapy"
-rate_pps = 1000
-ports = "top-100"
-tcp = true
-udp = true
-concurrency = 100
-per_host_concurrency = 4
-probe_timeout_s = 5
-retries = 1
-
-[enrich]
-rdns = true
-asn = true
-geoip = true
-cve = true
-favicon = true
-tech = true
-keep_raw = false
-
-[diff]
-default_from = "prev"
-
-# [retention]
-# keep_last_n = 24
-# keep_monthly = 12
-"""
+    cfg = Config(workspace=WorkspaceBlock(name=name, authorized_ranges=list(cidrs)))
+    return dump_config_toml(cfg)

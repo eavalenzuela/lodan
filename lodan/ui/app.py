@@ -7,18 +7,23 @@ wired to one workspace. Read-only — never writes to the workspace DB.
 # module: FastAPI resolves handler signatures at registration time via
 # get_type_hints(), which can't see closure-local aliases like `DB` when
 # every annotation is a forward-ref string.
+import contextlib
 import json
+import re
 import sqlite3
 from importlib.resources import files
 from pathlib import Path
+from urllib.parse import urlencode, urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from lodan import manage
 from lodan.paths import workspace_config, workspace_db
 from lodan.store.db import connect
+from lodan.ui.jobs import JobBusy, JobManager
 
 
 def _templates_dir() -> Path:
@@ -29,14 +34,34 @@ def _static_dir() -> Path:
     return Path(str(files("lodan.ui") / "static"))
 
 
-def create_app(workspace: str) -> FastAPI:
+def create_app(
+    workspace: str,
+    read_only: bool = False,
+    job_manager: JobManager | None = None,
+    allowed_hosts: set[str] | None = None,
+) -> FastAPI:
+    """Build the per-workspace app.
+
+    `read_only=True` disables every management/mutation endpoint (they return
+    403 and the write forms are hidden), leaving the browse-only surface — the
+    posture you want when sharing a workspace with a viewer. `job_manager` is
+    injectable for tests; production gets a fresh in-process one.
+
+    `allowed_hosts`, when set, restricts *mutation* requests to those Host-header
+    hostnames — the anti-DNS-rebinding defense for a no-token loopback bind
+    (`serve` pins it to the loopback names). None disables the check (embedding
+    / tests). Reads are never Host-restricted.
+    """
     if not workspace_config(workspace).exists():
         raise FileNotFoundError(f"no such workspace: {workspace}")
+
+    jobs = job_manager or JobManager()
 
     app = FastAPI(title=f"lodan: {workspace}")
     templates = Jinja2Templates(directory=str(_templates_dir()))
     templates.env.filters["short_fp"] = _short_fp
     templates.env.filters["from_json"] = _from_json_filter
+    templates.env.globals["read_only"] = read_only
 
     static_dir = _static_dir()
     if static_dir.exists():
@@ -48,6 +73,31 @@ def create_app(workspace: str) -> FastAPI:
             yield conn
         finally:
             conn.close()
+
+    def _guard_writable(request: Request) -> None:
+        if read_only:
+            raise HTTPException(403, detail="this instance is read-only")
+        # Anti-DNS-rebinding: the Host header must be one we trust. Comparing
+        # Origin to Host is not enough — a rebound attacker.com resolves to
+        # 127.0.0.1 and sends Origin==Host==attacker.com. Pinning the Host to
+        # the loopback names the browser can't be tricked into sending for a
+        # foreign domain is what actually stops it.
+        if allowed_hosts is not None:
+            hostname = urlparse(f"//{request.headers.get('host', '')}").hostname or ""
+            if hostname.lower() not in allowed_hosts:
+                raise HTTPException(403, detail="untrusted Host header")
+        # Lightweight CSRF defense: modern browsers attach Origin to state-
+        # changing requests. If it's present it must match the Host we're
+        # served on, so a page on another origin can't drive scans or edit
+        # scope. Non-browser clients (tests, curl) send no Origin and pass.
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.headers.get("host", ""):
+            raise HTTPException(403, detail="cross-origin request refused")
+
+    def _redirect_manage(notice: str, level: str = "ok") -> RedirectResponse:
+        # Post/Redirect/Get so a browser refresh doesn't re-submit the form.
+        qs = urlencode({"notice": notice, "level": level})
+        return RedirectResponse(url=f"/manage?{qs}", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request, db: sqlite3.Connection = Depends(_db)) -> HTMLResponse:  # noqa: B008
@@ -273,6 +323,187 @@ def create_app(workspace: str) -> FastAPI:
             {"workspace": workspace, "kind": "san",
              "needle": q, "matches": matches},
         )
+
+    # ---- management: scans -------------------------------------------------
+
+    def _scan_status_partial(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "_scan_status.html", {"job": jobs.current(workspace)}
+        )
+
+    @app.post("/scan/run", response_class=HTMLResponse)
+    def scan_run(request: Request) -> HTMLResponse:
+        _guard_writable(request)
+        with contextlib.suppress(JobBusy):
+            jobs.start(workspace)  # already running -> just show the live status
+        return _scan_status_partial(request)
+
+    @app.get("/scan/status", response_class=HTMLResponse)
+    def scan_status(request: Request) -> HTMLResponse:
+        return _scan_status_partial(request)
+
+    # ---- management: config ------------------------------------------------
+
+    @app.get("/manage", response_class=HTMLResponse)
+    def manage_page(
+        request: Request, notice: str | None = None, level: str | None = None
+    ) -> HTMLResponse:
+        cfg = manage.load(workspace)
+        return templates.TemplateResponse(
+            request, "manage.html",
+            {
+                "workspace": workspace,
+                "cfg": cfg,
+                "job": jobs.current(workspace),
+                "backends": ["auto", "masscan", "naabu", "scapy"],
+                "notice": notice,
+                "level": level or "ok",
+            },
+        )
+
+    @app.post("/manage/scope/add")
+    def scope_add(request: Request, targets: str = Form(...)):  # noqa: B008
+        _guard_writable(request)
+        raws = [t for t in re.split(r"[\s,]+", targets) if t]
+        if not raws:
+            return _redirect_manage("no targets provided", "err")
+        try:
+            res = manage.add_cidrs(workspace, raws)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        parts = []
+        if res.added:
+            parts.append("added " + ", ".join(res.added))
+        if res.skipped:
+            parts.append("already in scope: " + ", ".join(res.skipped))
+        level = "ok"
+        if res.cloud_warnings:
+            parts.append(
+                "⚠ " + "; ".join(res.cloud_warnings)
+                + " — scans refuse these unless cloud_provider_allowed is set"
+            )
+            level = "warn"
+        return _redirect_manage("; ".join(parts) or "no change", level)
+
+    @app.post("/manage/scope/remove")
+    def scope_remove(request: Request, cidr: str = Form(...)):  # noqa: B008
+        _guard_writable(request)
+        try:
+            removed = manage.remove_cidr(workspace, cidr)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage(
+            f"removed {cidr}" if removed else f"{cidr} was not in scope",
+            "ok" if removed else "warn",
+        )
+
+    @app.post("/manage/cloud")
+    def cloud_policy(  # noqa: B008
+        request: Request,
+        allowed: bool = Form(False),
+        justification: str = Form(""),
+    ):
+        _guard_writable(request)
+        try:
+            manage.set_cloud_policy(workspace, allowed, justification)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage("cloud-provider policy updated")
+
+    @app.post("/manage/scan")
+    def scan_settings(  # noqa: B008
+        request: Request,
+        backend: str = Form(...),
+        ports: str = Form(...),
+        rate_pps: int = Form(...),
+        concurrency: int = Form(...),
+        per_host_concurrency: int = Form(...),
+        probe_timeout_s: float = Form(...),
+        retries: int = Form(...),
+        tcp: bool = Form(False),
+        udp: bool = Form(False),
+    ):
+        _guard_writable(request)
+        updates = {
+            "backend": backend, "ports": ports, "rate_pps": rate_pps,
+            "concurrency": concurrency, "per_host_concurrency": per_host_concurrency,
+            "probe_timeout_s": probe_timeout_s, "retries": retries,
+            "tcp": tcp, "udp": udp,
+        }
+        try:
+            manage.update_scan(workspace, updates)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage("scan settings saved")
+
+    @app.post("/manage/enrich")
+    def enrich_settings(  # noqa: B008
+        request: Request,
+        rdns: bool = Form(False),
+        asn: bool = Form(False),
+        geoip: bool = Form(False),
+        cve: bool = Form(False),
+        favicon: bool = Form(False),
+        tech: bool = Form(False),
+        keep_raw: bool = Form(False),
+    ):
+        _guard_writable(request)
+        updates = {
+            "rdns": rdns, "asn": asn, "geoip": geoip, "cve": cve,
+            "favicon": favicon, "tech": tech, "keep_raw": keep_raw,
+        }
+        try:
+            manage.update_enrich(workspace, updates)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage("enrichment settings saved")
+
+    @app.post("/manage/diff")
+    def diff_settings(request: Request, default_from: str = Form(...)):  # noqa: B008
+        _guard_writable(request)
+        try:
+            manage.set_diff_default_from(workspace, default_from)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage("diff default saved")
+
+    @app.post("/manage/retention")
+    def retention_settings(  # noqa: B008
+        request: Request,
+        keep_last_n: str = Form(""),
+        keep_monthly: str = Form(""),
+    ):
+        _guard_writable(request)
+
+        def _opt_int(s: str) -> int | None:
+            s = s.strip()
+            return int(s) if s else None
+
+        try:
+            kln, km = _opt_int(keep_last_n), _opt_int(keep_monthly)
+        except ValueError:
+            return _redirect_manage("retention values must be whole numbers", "err")
+        try:
+            manage.set_retention(workspace, kln, km)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage("retention policy saved")
+
+    @app.post("/favicon-label")
+    def favicon_label_set(  # noqa: B008
+        request: Request,
+        mmh3: int = Form(...),
+        label: str = Form(""),
+    ):
+        _guard_writable(request)
+        from lodan.store.writer import set_favicon_label
+
+        conn = connect(workspace_db(workspace))
+        try:
+            set_favicon_label(conn, mmh3, label.strip())
+        finally:
+            conn.close()
+        return RedirectResponse(url=f"/pivot/favicon/{mmh3}", status_code=303)
 
     @app.get("/healthz", response_class=HTMLResponse)
     def healthz() -> HTMLResponse:

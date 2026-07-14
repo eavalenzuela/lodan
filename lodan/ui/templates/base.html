@@ -17,13 +17,14 @@
       <a href="/diffs">diffs</a>
       <a href="/pivot/san">pivot</a>
       <a href="/query">query</a>
+      <a href="/manage">manage{% if read_only %} ·ro{% endif %}</a>
     </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
   <footer>
-    <small>read-only · local Shodan for ranges you own</small>
+    <small>{% if read_only %}read-only · {% endif %}local Shodan for ranges you own</small>
   </footer>
 </body>
 </html>

@@ -353,6 +353,14 @@ def serve_cmd(
         str | None,
         typer.Option("--auth-token", help="Required when binding non-loopback."),
     ] = None,
+    read_only: Annotated[
+        bool,
+        typer.Option(
+            "--read-only",
+            help="Disable management endpoints (scanning, scope + settings edits). "
+            "Browse-only — the posture for sharing a workspace with a viewer.",
+        ),
+    ] = False,
 ) -> None:
     """Serve the web UI for the given workspace."""
     if not workspace_config(workspace).exists():
@@ -367,7 +375,8 @@ def serve_cmd(
         err.print(f"[red]invalid --addr:[/] {addr!r}")
         raise typer.Exit(1) from None
 
-    if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
+    loopback = ("127.0.0.1", "localhost", "::1")
+    if host not in loopback and not auth_token:
         err.print(
             "[red]refusing to bind non-loopback without --auth-token[/] "
             "(token is checked against the X-Lodan-Token header)"
@@ -378,10 +387,17 @@ def serve_cmd(
 
     from lodan.ui.app import create_app
 
-    fastapi_app = create_app(workspace)
+    # On a loopback bind there's no token, so pin mutation requests to loopback
+    # Host headers (anti-DNS-rebinding). Non-loopback binds require --auth-token,
+    # which already gates every request, and legitimately answer to many Hosts.
+    allowed_hosts = set(loopback) if host in loopback else None
+    fastapi_app = create_app(workspace, read_only=read_only, allowed_hosts=allowed_hosts)
     if auth_token:
         _install_auth_token(fastapi_app, auth_token)
-    console.print(f"[green]serving[/] http://{host}:{port} (workspace={workspace})")
+    mode = "read-only" if read_only else "management enabled"
+    console.print(
+        f"[green]serving[/] http://{host}:{port} (workspace={workspace}, {mode})"
+    )
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
 
 

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% set page_title = "manage" %}
+{% block content %}
+<h1>Manage — {{ workspace }}</h1>
+
+{% if notice %}
+  <div class="notice notice-{{ level }}">{{ notice }}</div>
+{% endif %}
+
+{% if read_only %}
+  <div class="notice notice-warn">
+    This instance is <strong>read-only</strong>. Settings below are shown for
+    reference; editing and scanning are disabled.
+  </div>
+{% endif %}
+
+{% include "_scan_control.html" %}
+
+<section class="manage-grid">
+
+  <div class="card">
+    <h2>Scope — authorized ranges</h2>
+    <p class="muted">
+      Targets lodan is allowed to scan. Cloud-overlapping ranges are still
+      refused at scan time unless the cloud policy below is set.
+    </p>
+    {% if cfg.workspace.authorized_ranges %}
+      <table class="scope">
+        <tbody>
+          {% for cidr in cfg.workspace.authorized_ranges %}
+            <tr>
+              <td><code>{{ cidr }}</code></td>
+              <td class="right">
+                {% if not read_only %}
+                <form action="/manage/scope/remove" method="post" class="inline">
+                  <input type="hidden" name="cidr" value="{{ cidr }}">
+                  <button type="submit" class="danger">remove</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No ranges yet — a scan will refuse until you add one.</p>
+    {% endif %}
+    {% if not read_only %}
+    <form action="/manage/scope/add" method="post" class="stack">
+      <label>Add targets
+        <input type="text" name="targets"
+               placeholder="10.0.0.0/24, 192.168.1.5  (IPs or CIDRs, space/comma separated)"
+               size="52" required>
+      </label>
+      <button type="submit">add to scope</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Cloud-provider policy</h2>
+    <p class="muted">
+      Ranges overlapping known cloud prefixes are blocked unless this is on and
+      a justification is given (copied into each scan row for audit).
+    </p>
+    <form action="/manage/cloud" method="post" class="stack">
+      <label class="checkbox">
+        <input type="checkbox" name="allowed" value="true"
+               {% if cfg.workspace.cloud_provider_allowed %}checked{% endif %}
+               {% if read_only %}disabled{% endif %}>
+        allow scanning cloud-overlapping ranges
+      </label>
+      <label>Justification
+        <input type="text" name="justification" size="52"
+               value="{{ cfg.workspace.cloud_provider_justification }}"
+               {% if read_only %}disabled{% endif %}>
+      </label>
+      {% if not read_only %}<button type="submit">save policy</button>{% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Scan settings</h2>
+    <form action="/manage/scan" method="post" class="stack">
+      <label>Discovery backend
+        <select name="backend" {% if read_only %}disabled{% endif %}>
+          {% for b in backends %}
+            <option value="{{ b }}" {% if cfg.scan.backend == b %}selected{% endif %}>{{ b }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Ports
+        <input type="text" name="ports" value="{{ cfg.scan.ports }}"
+               placeholder="top-100 | top-1000 | 22,80,443 | 1-1024"
+               {% if read_only %}disabled{% endif %}>
+      </label>
+      <div class="row">
+        <label>rate (pps)
+          <input type="number" name="rate_pps" value="{{ cfg.scan.rate_pps }}" min="1" {% if read_only %}disabled{% endif %}>
+        </label>
+        <label>concurrency
+          <input type="number" name="concurrency" value="{{ cfg.scan.concurrency }}" min="1" {% if read_only %}disabled{% endif %}>
+        </label>
+        <label>per-host
+          <input type="number" name="per_host_concurrency" value="{{ cfg.scan.per_host_concurrency }}" min="1" {% if read_only %}disabled{% endif %}>
+        </label>
+      </div>
+      <div class="row">
+        <label>probe timeout (s)
+          <input type="number" step="0.5" name="probe_timeout_s" value="{{ cfg.scan.probe_timeout_s }}" min="0" {% if read_only %}disabled{% endif %}>
+        </label>
+        <label>retries
+          <input type="number" name="retries" value="{{ cfg.scan.retries }}" min="0" {% if read_only %}disabled{% endif %}>
+        </label>
+      </div>
+      <div class="row">
+        <label class="checkbox"><input type="checkbox" name="tcp" value="true" {% if cfg.scan.tcp %}checked{% endif %} {% if read_only %}disabled{% endif %}> TCP</label>
+        <label class="checkbox"><input type="checkbox" name="udp" value="true" {% if cfg.scan.udp %}checked{% endif %} {% if read_only %}disabled{% endif %}> UDP</label>
+      </div>
+      {% if not read_only %}<button type="submit">save scan settings</button>{% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Enrichment</h2>
+    <form action="/manage/enrich" method="post" class="stack">
+      <div class="row wrap">
+        {% for key, on in [
+          ("rdns", cfg.enrich.rdns), ("asn", cfg.enrich.asn),
+          ("geoip", cfg.enrich.geoip), ("cve", cfg.enrich.cve),
+          ("favicon", cfg.enrich.favicon), ("tech", cfg.enrich.tech),
+          ("keep_raw", cfg.enrich.keep_raw)] %}
+          <label class="checkbox">
+            <input type="checkbox" name="{{ key }}" value="true" {% if on %}checked{% endif %} {% if read_only %}disabled{% endif %}>
+            {{ key }}
+          </label>
+        {% endfor %}
+      </div>
+      {% if not read_only %}<button type="submit">save enrichment</button>{% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Diff &amp; retention</h2>
+    <form action="/manage/diff" method="post" class="stack">
+      <label>Default diff base
+        <input type="text" name="default_from" value="{{ cfg.diff.default_from }}"
+               placeholder="prev | latest | &lt;scan id&gt; | YYYY-MM-DD"
+               {% if read_only %}disabled{% endif %}>
+      </label>
+      {% if not read_only %}<button type="submit">save diff default</button>{% endif %}
+    </form>
+    <form action="/manage/retention" method="post" class="stack">
+      <div class="row">
+        <label>keep last N
+          <input type="number" name="keep_last_n" min="1"
+                 value="{{ cfg.retention.keep_last_n if cfg.retention.keep_last_n is not none else '' }}"
+                 placeholder="off" {% if read_only %}disabled{% endif %}>
+        </label>
+        <label>keep monthly
+          <input type="number" name="keep_monthly" min="1"
+                 value="{{ cfg.retention.keep_monthly if cfg.retention.keep_monthly is not none else '' }}"
+                 placeholder="off" {% if read_only %}disabled{% endif %}>
+        </label>
+      </div>
+      <p class="muted">Blank disables that knob. Apply with <code>lodan prune {{ workspace }}</code>.</p>
+      {% if not read_only %}<button type="submit">save retention</button>{% endif %}
+    </form>
+  </div>
+
+</section>
+{% endblock %}

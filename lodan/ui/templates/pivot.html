@@ -8,6 +8,15 @@
   <input type="search" name="q" placeholder="*.corp.example.com" value="{{ needle or '' }}" autofocus>
 </form>
 {% endif %}
+{% if kind == "favicon_mmh3" and not read_only %}
+<form class="filters" action="/favicon-label" method="post">
+  <input type="hidden" name="mmh3" value="{{ needle }}">
+  <input type="text" name="label" placeholder="operator label, e.g. Jenkins login"
+         value="{{ label or '' }}" size="40">
+  <input type="submit" value="save label">
+  <span class="muted">— shown wherever this favicon appears</span>
+</form>
+{% endif %}
 <table>
   <thead>
     <tr><th>scan</th><th>ip</th><th>port</th><th>service</th><th>banner</th><th>match</th></tr>

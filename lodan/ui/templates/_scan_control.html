@@ -1,0 +1,19 @@
+<div class="card scan-control">
+  <h2>Run a scan</h2>
+  {% if read_only %}
+    <p class="muted">read-only instance — scanning is disabled.</p>
+  {% else %}
+    <p class="muted">
+      Discovers + probes + enriches the current scope, then auto-diffs against
+      the previous scan. Same guards as <code>lodan scan</code>.
+    </p>
+    <form hx-post="/scan/run" hx-target="#scan-status" hx-swap="innerHTML"
+          hx-disabled-elt="find button">
+      <button type="submit">Run scan now</button>
+    </form>
+  {% endif %}
+  <div id="scan-status" class="scan-status"
+       hx-get="/scan/status" hx-trigger="load" hx-swap="innerHTML">
+    <span class="muted">loading status…</span>
+  </div>
+</div>

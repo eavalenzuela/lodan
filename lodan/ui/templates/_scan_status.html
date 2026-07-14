@@ -1,0 +1,33 @@
+{% if job is none %}
+  <span class="muted">idle — no scan has run in this session.</span>
+{% elif job.state == "running" %}
+  <div hx-get="/scan/status" hx-trigger="every 2s" hx-target="#scan-status" hx-swap="innerHTML">
+    <span class="status-running">● scan running…</span>
+    <span class="muted">started {{ job.started_at }}</span>
+  </div>
+{% elif job.state == "completed" %}
+  <div>
+    <span class="status-completed">✔ scan #{{ job.scan_id }} complete</span>
+    <span class="muted">finished {{ job.finished_at }}</span>
+    <ul class="totals">
+      <li><span class="label">discovered</span><span class="value">{{ job.summary.services_discovered }}</span></li>
+      <li><span class="label">probed</span><span class="value">{{ job.summary.services_probed }}</span></li>
+      <li><span class="label">hosts</span><span class="value">{{ job.summary.hosts_enriched }}</span></li>
+      <li><span class="label">CVEs</span><span class="value">{{ job.summary.vulns_matched }}</span></li>
+      {% if job.summary.authz_rejections %}
+      <li><span class="label">authz-rejected</span><span class="value">{{ job.summary.authz_rejections }}</span></li>
+      {% endif %}
+      {% if job.summary.diff_from is not none %}
+      <li><span class="label">diff vs #{{ job.summary.diff_from }}</span><span class="value">{{ job.summary.diff_total }}</span></li>
+      {% endif %}
+    </ul>
+    <p><a href="/services?scan={{ job.scan_id }}">view services</a> ·
+       <a href="/">refresh dashboard</a></p>
+  </div>
+{% else %}
+  <div>
+    <span class="status-failed">✘ scan failed</span>
+    <span class="muted">{{ job.finished_at }}</span>
+    <pre class="error">{{ job.error }}</pre>
+  </div>
+{% endif %}
