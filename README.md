@@ -8,15 +8,21 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 320+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 420+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
-- 14 protocol probes: TLS (with JA3/JA3S and JA4/JA4S), HTTP (headers,
-  title, favicon mmh3, tech fingerprinting), SSH (banner + host keys),
-  SMB (SMB2 NEGOTIATE), RDP (X.224 NEG_REQ), MQTT, Redis, MongoDB,
-  Elasticsearch, DNS, FTP, SMTP, Docker, Kubernetes. All
-  detection-only — no credentials, no auth attempts.
+- 22 protocol probes, all detection-only — no credentials, no auth attempts:
+  TLS (with JA3/JA3S and JA4/JA4S), HTTP (headers, title, favicon mmh3, tech
+  fingerprinting), SSH (banner + host keys), SMB (SMB2 NEGOTIATE), RDP (X.224
+  NEG_REQ), MQTT, Redis, MongoDB, Docker, Kubernetes, SMTP, FTP, DNS
+  (version.bind), Elasticsearch, IMAP, POP3, PostgreSQL (SSLRequest), MySQL /
+  MariaDB (handshake), VNC (RFB security types), Telnet, rsync, and AMQP.
+- Exposure / misconfiguration findings derived from the probe results:
+  cleartext-admin (Telnet), no-TLS (SMTP/IMAP/POP3/FTP/MySQL/PostgreSQL),
+  unauthenticated services (VNC no-auth, open Elasticsearch/Redis/Docker/Mongo),
+  and TLS certificate problems (expired / expiring-soon / self-signed /
+  deprecated protocol version). Browse them with `lodan findings`.
 - Offline enrichment: rDNS, ASN/org + country via IP2Location LITE
   (token-based auto-download of both DB-ASN and DB1), CVE matching
   against the NVD 2.0 snapshot.
@@ -104,11 +110,14 @@ lodan prune home-lab --dry-run
 | `lodan update --ip2location [--token T]` | download IP2Location LITE DB-ASN + DB1 (with token) or report status |
 | `lodan scan <ws>`               | discover + probe + enrich + auto-diff |
 | `lodan query <ws> "expr"`       | run a mini-DSL query; `--json` for JSONL |
+| `lodan findings <ws>`           | exposure / misconfiguration findings; `--severity`, `--scan`, `--json` |
 | `lodan diff <ws>`               | scan-to-scan diff; `--from`/`--to` accept id / `prev` / `latest` / ISO date |
 | `lodan serve <ws>`              | FastAPI UI + management; localhost-only unless `--auth-token`; `--read-only` for a browse-only instance |
 | `lodan export <ws>`             | JSONL or JSON array dump; `--include`, `--scan`, `--output` |
+| `lodan report <ws>`             | self-contained report bundle (HTML + CSV + SARIF + checksummed manifest); `--scan`, `--output` |
 | `lodan prune <ws>`              | apply `[retention]` from config; `--dry-run` |
 | `lodan favicon-label <ws> <mmh3> "<label>"` | tag a favicon hash for the pivot views |
+| `lodan authz-ledger <ws>`       | show the immutable authorization ledger; `--decision`, `--scan`, `--json` |
 
 ## Query DSL
 
@@ -150,7 +159,7 @@ ip:10.0.0.*
   workspaces/<name>/
     config.toml                # authorized_ranges + knobs
     lodan.db                   # one DB per workspace (portable)
-    scan.log
+    scan.log                   # append-only JSONL audit log (see Audit trail)
 ```
 
 ## Scan what you own
@@ -170,7 +179,10 @@ Every probe is strictly detection-only:
 - No credentials sent. Ever.
 - No SSH login, no SMB session setup, no RDP Cookie: mstshash, no
   MQTT Username/Password, no Redis AUTH, no Docker container listing,
-  no Kubernetes pod listing.
+  no Kubernetes pod listing. Likewise for the newer probes: no SMTP/IMAP/POP3
+  login, no FTP USER/PASS, no VNC security-type selection or challenge response,
+  no MySQL/PostgreSQL startup or auth packet — only the pre-auth handshake,
+  greeting, or capability query each protocol answers without credentials.
 - A deliberately-empty HTTP `GET /` and `GET /favicon.ico` with a
   `User-Agent: lodan/<version>` header is the maximum active behavior
   against a web endpoint.
@@ -194,6 +206,63 @@ label favicons) sit behind the same posture, plus two guards of their own:
   the cloud-prefix guard and the per-target allowlist still run at scan time,
   so nothing added through the UI is scanned unless it also clears authz.
 
+## Audit trail
+
+Every scan leaves two independent, reconstructable records. See
+[SECURITY.md](SECURITY.md) for how they fit the responsible-use contract.
+
+**`scan.log`** — an append-only JSONL audit log in the workspace directory. One
+JSON object per line, each with `event`, `level`, an ISO-8601 UTC `timestamp`,
+and the bound `operator` / `workspace` / `scan_id`:
+
+```json
+{"event":"scan_started","operator":"alice","workspace":"home-lab","scan_id":7,"cidrs":["10.0.0.0/24"],"backend":"masscan","port_count":100,"timestamp":"2026-07-15T21:04:11Z","level":"info"}
+{"event":"authz_rejected","operator":"alice","workspace":"home-lab","scan_id":7,"ip":"8.8.8.8","port":53,"reason":"target 8.8.8.8 is not in authorized_ranges","timestamp":"2026-07-15T21:04:12Z","level":"info"}
+{"event":"scan_finished","operator":"alice","workspace":"home-lab","scan_id":7,"status":"completed","services_discovered":42,"authz_rejections":1,"timestamp":"2026-07-15T21:05:02Z","level":"info"}
+```
+
+Events: `scan_started`, `authz_rejected`, `discovery_completed`,
+`probes_completed`, `enrichment_completed`, `diff_computed`, `scan_finished`,
+`scan_failed`. The operator is `$LODAN_OPERATOR` if set, else the OS login name.
+
+**Authorization ledger** — an immutable, append-only `authz_ledger` table
+recording every authorization *decision*, independent of scan bookkeeping (a
+retention prune erases a scan's results but **not** its ledger record). Each row
+is `decision` (`authorized` / `refused`), `scope_kind` (`cidr` / `cloud` /
+`target`), `target`, optional `port` / `proto` / `reason`, plus `operator`,
+`scan_id`, and `ts`. Query it:
+
+```
+lodan authz-ledger home-lab                    # full ledger
+lodan authz-ledger home-lab --decision refused # only what we declined to touch
+lodan authz-ledger home-lab --scan 7 --json    # one scan, as JSONL
+```
+
+## Scheduled rescans & change notifications
+
+`lodan scan` is idempotent per workspace and auto-diffs against the previous
+scan, so scheduling a rescan turns "what changed since last time" into a
+push-free, always-current view. A sample systemd user service + timer ships in
+[`contrib/`](contrib/) (a cron entry works too).
+
+To make drift *push*-driven, add an opt-in `[notify]` block to the workspace
+`config.toml`. After a rescan, lodan fires a diff summary **only when the diff is
+non-empty** — a quiet rescan stays quiet. Both sinks are off until set, and a
+failing sink is logged (audit + `scan_errors`) without failing the scan:
+
+```toml
+[notify]
+webhook_url = "https://hooks.example.com/lodan"   # POSTs the diff summary as JSON
+email_to = "team@example.com"                      # comma-separated; omit to disable
+email_from = "lodan@localhost"
+smtp_host = "localhost"
+smtp_port = 25
+smtp_starttls = false          # SMTP creds via $LODAN_SMTP_USERNAME / $LODAN_SMTP_PASSWORD
+```
+
+The webhook payload carries `workspace`, `scan_id`, `diff_from`, per-kind
+`counts`, a few example findings, and a ready-made `text` line.
+
 ## uvt NVD snapshot share
 
 lodan owns `~/.lodan/data/nvd/cve.db` as the canonical bulk NVD CPE
@@ -212,25 +281,24 @@ ln -s ~/.lodan/data/nvd/cve.db /path/to/uvt/instance/nvd-cve.db
 
 lodan never reads from uvt, so the link is always lodan → uvt.
 
-## Known deferred items
+## IPv6
 
-- **IP2Location LITE IPv6** — `lodan update --ip2location --token <T>`
-  fetches the IPv4 LITE DB-ASN (`DBASNLITEBIN`). The IPv6 variant isn't
-  wired since v1 is IPv4-only.
+Dual-stack: `authorized_ranges`, the cloud-prefix guard, discovery, probing,
+and result storage all handle IPv4 and IPv6. Addresses are stored canonically
+(IPv6 compressed + lower-cased) so a host never splits a pivot or shows a
+spurious diff. Membership and cloud-overlap checks are family-guarded, so a v6
+target against a v4-only allowlist is a clean "not authorized", never an error.
+
+One enrichment gap remains: ASN/geoip come from the **IPv4** IP2Location LITE
+DBs, so IPv6 hosts get rDNS and CVE matching but no ASN/country until the LITE
+IPv6 DB is wired (`lodan update --ip2location` fetches the IPv4 `DBASNLITEBIN`
+today). v6 enrichment degrades silently — it never fails a scan.
 
 ## Contributing
 
-- `pytest` keeps the test suite green (320+ tests, most parser-only and
-  offline). The Docker-backed integration tests under `tests/docker/`
-  are opt-in — they spin up nginx (plain + TLS), Redis, MongoDB and
-  OpenSSH on loopback and drive the real probes against them:
-
-  ```
-  LODAN_DOCKER_TESTS=1 pytest tests/docker/        # needs docker + compose
-  ```
-
-  Without that env var they skip, so the default run stays fully offline.
-- `ruff check .` is the lint gate; matches what CI runs.
-- Follow the feature-sized commit style visible in `git log` — one
-  logical change per commit with a message that says *why* alongside
-  *what*.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test/lint gates
+(including the opt-in Docker integration suite), the codebase invariants to
+preserve, and commit style — and [SECURITY.md](SECURITY.md) for the
+responsible-use contract every change must keep. In short: `pytest` stays green
+and offline by default, `ruff check .` is the lint gate, and one logical change
+per commit with a message that says *why*.

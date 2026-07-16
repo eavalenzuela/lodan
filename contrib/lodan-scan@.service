@@ -1,0 +1,44 @@
+# Sample systemd (user) service: run a lodan scan for one workspace.
+#
+# Templated on the workspace name: `%i` is whatever follows the `@`, so
+# `lodan-scan@home-lab.service` scans the "home-lab" workspace. Pair it with
+# the matching `lodan-scan@.timer` for scheduled rescans.
+#
+# Install (per-user, recommended — lodan writes under ~/.lodan):
+#   mkdir -p ~/.config/systemd/user
+#   cp lodan-scan@.service lodan-scan@.timer ~/.config/systemd/user/
+#   systemctl --user enable --now lodan-scan@home-lab.timer
+#
+# lodan scan is idempotent per workspace (one scan at a time; the diff against
+# the previous scan is computed automatically), so it is safe to run on a timer.
+
+[Unit]
+Description=lodan reconnaissance scan for workspace "%i"
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Point this at your install. For an editable venv checkout, e.g.:
+#   ExecStart=/opt/lodan/.venv/bin/lodan scan %i
+ExecStart=lodan scan %i
+
+# Stamped into every audit-log line and authz-ledger row for this run, so the
+# trail shows the scan was machine-triggered rather than hand-run. Override per
+# deployment (a service-account name, a change ticket, ...).
+Environment=LODAN_OPERATOR=systemd-timer
+
+# Be a good neighbour on a shared host.
+Nice=10
+IOSchedulingClass=idle
+
+# Modest sandboxing — this is recon tooling, keep its blast radius small. lodan
+# only needs to write under ~/.lodan.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.lodan
+# NOTE: the masscan/scapy discovery backends open raw sockets and need
+# CAP_NET_RAW (typically a system unit run as root, or a binary with the
+# capability set). The naabu backend and all probes work unprivileged.

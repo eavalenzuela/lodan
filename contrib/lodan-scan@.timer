@@ -1,0 +1,25 @@
+# Sample systemd (user) timer: schedule nightly lodan rescans for one workspace.
+#
+# Templated on the workspace name — `lodan-scan@home-lab.timer` drives
+# `lodan-scan@home-lab.service`. See that unit for install instructions.
+#
+# Enable:
+#   systemctl --user enable --now lodan-scan@home-lab.timer
+#   systemctl --user list-timers            # confirm the next run
+#
+# "what changed since last time" is lodan's headline feature: each scheduled
+# scan auto-diffs against the previous one, so drift accumulates in scan_diffs
+# without any manual polling.
+
+[Unit]
+Description=Nightly lodan rescan for workspace "%i"
+
+[Timer]
+# 03:00 local, jittered up to 30 min so many workspaces don't fire at once.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1800
+# Catch up on a run missed while the machine was off.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
