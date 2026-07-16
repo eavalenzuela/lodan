@@ -30,6 +30,10 @@ def workspace_config(name: str) -> Path:
     return workspace_dir(name) / "config.toml"
 
 
+def workspace_scan_log(name: str) -> Path:
+    return workspace_dir(name) / "scan.log"
+
+
 def nvd_dir() -> Path:
     return data_dir() / "nvd"
 
