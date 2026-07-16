@@ -12,10 +12,23 @@ handle them uniformly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv4Network, ip_address, ip_network
+from ipaddress import (
+    IPv4Address,
+    IPv4Network,
+    IPv6Address,
+    IPv6Network,
+    ip_address,
+    ip_network,
+)
 
 from lodan.cloud_prefixes import all_prefixes
 from lodan.config import WorkspaceBlock
+
+# Both address families are first-class; membership/overlap must always be
+# guarded by version because `addr in net` / `net.overlaps(other)` raise
+# TypeError when the two sides are different families.
+Network = IPv4Network | IPv6Network
+Address = IPv4Address | IPv6Address
 
 
 class AuthorizationError(Exception):
@@ -25,23 +38,23 @@ class AuthorizationError(Exception):
 @dataclass(frozen=True)
 class CloudHit:
     provider: str
-    prefix: IPv4Network
+    prefix: Network
 
 
-def authorized_networks(ws: WorkspaceBlock) -> list[IPv4Network]:
-    return [IPv4Network(c, strict=False) for c in ws.authorized_ranges]
+def authorized_networks(ws: WorkspaceBlock) -> list[Network]:
+    return [ip_network(c, strict=False) for c in ws.authorized_ranges]
 
 
-def is_authorized(target: IPv4Address | str, networks: list[IPv4Network]) -> bool:
+def is_authorized(target: Address | str, networks: list[Network]) -> bool:
     t = ip_address(target) if isinstance(target, str) else target
-    return any(t in net for net in networks)
+    return any(t.version == net.version and t in net for net in networks)
 
 
-def cloud_overlaps(net: IPv4Network) -> list[CloudHit]:
-    """Return every cloud prefix that `net` overlaps (either direction)."""
+def cloud_overlaps(net: Network) -> list[CloudHit]:
+    """Return every same-family cloud prefix that `net` overlaps (either direction)."""
     hits: list[CloudHit] = []
     for provider, cloud_net in all_prefixes():
-        if net.overlaps(cloud_net):
+        if net.version == cloud_net.version and net.overlaps(cloud_net):
             hits.append(CloudHit(provider=provider, prefix=cloud_net))
     return hits
 
@@ -57,8 +70,6 @@ def check_workspace(ws: WorkspaceBlock) -> None:
 
     for cidr in ws.authorized_ranges:
         net = ip_network(cidr, strict=False)
-        if not isinstance(net, IPv4Network):
-            raise AuthorizationError(f"only IPv4 supported in v1: {cidr}")
         hits = cloud_overlaps(net)
         if not hits:
             continue
@@ -75,7 +86,7 @@ def check_workspace(ws: WorkspaceBlock) -> None:
             )
 
 
-def check_target(target: IPv4Address | str, networks: list[IPv4Network]) -> None:
+def check_target(target: Address | str, networks: list[Network]) -> None:
     """Raise if `target` is not covered by any authorized network."""
     if not is_authorized(target, networks):
         raise AuthorizationError(f"target {target} is not in authorized_ranges")

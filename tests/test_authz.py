@@ -81,3 +81,41 @@ def test_cloud_overlap_empty_for_private() -> None:
     from ipaddress import IPv4Network
 
     assert cloud_overlaps(IPv4Network("10.0.0.0/24")) == []
+
+
+# --- IPv6 ---------------------------------------------------------------
+
+
+def test_ipv6_range_passes_workspace_check() -> None:
+    check_workspace(ws(["2001:db8::/32"]))  # must not raise
+
+
+def test_ipv6_target_membership() -> None:
+    nets = authorized_networks(ws(["2001:db8::/32", "10.0.0.0/24"]))
+    assert is_authorized("2001:db8::5", nets)
+    assert not is_authorized("2001:dead::1", nets)
+
+
+def test_cross_family_is_false_not_error() -> None:
+    """A v6 target against a v4-only allowlist (and vice versa) must be a clean
+    'not authorized', never a TypeError from `addr in net`."""
+    v4_only = authorized_networks(ws(["10.0.0.0/24"]))
+    v6_only = authorized_networks(ws(["2001:db8::/32"]))
+    assert is_authorized("2001:db8::5", v4_only) is False
+    assert is_authorized("10.0.0.5", v6_only) is False
+
+
+def test_ipv6_cloud_overlap_and_cross_family_safe() -> None:
+    from ipaddress import ip_network
+
+    hits = cloud_overlaps(ip_network("2600:1f00:abcd::/48"))  # inside AWS v6
+    assert any(h.provider == "aws" for h in hits)
+    # A v4 net compared against the (now mixed) prefix list must not raise.
+    assert cloud_overlaps(ip_network("10.0.0.0/24")) == []
+
+
+def test_ipv6_cloud_guard_blocks_without_optin() -> None:
+    with pytest.raises(AuthorizationError):
+        check_workspace(ws(["2600:1f00:abcd::/48"]))  # AWS v6, no opt-in
+    # With opt-in + justification it passes.
+    check_workspace(ws(["2600:1f00:abcd::/48"], cloud_allowed=True, justification="lab"))

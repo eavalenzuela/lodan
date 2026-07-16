@@ -60,19 +60,20 @@ class ScapyBackend:
 
 
 def _sweep(spec: DiscoverySpec) -> list[tuple[Any, Any]]:
-    from scapy.all import IP, TCP, UDP, Raw, conf, sr  # type: ignore
+    from scapy.all import IP, TCP, UDP, IPv6, Raw, conf, sr  # type: ignore
 
     conf.verb = 0
     packets = []
     for net in spec.targets:
+        l3 = IPv6 if net.version == 6 else IP  # IPv4 or IPv6 network layer
         for ip in net.hosts() if net.num_addresses > 1 else [net.network_address]:
             ip_s = str(ip)
             for port in spec.ports:
                 if spec.tcp:
-                    packets.append(IP(dst=ip_s) / TCP(dport=port, flags="S"))
+                    packets.append(l3(dst=ip_s) / TCP(dport=port, flags="S"))
                 if spec.udp:
                     packets.append(
-                        IP(dst=ip_s) / UDP(dport=port) / Raw(load=_udp_payload(port))
+                        l3(dst=ip_s) / UDP(dport=port) / Raw(load=_udp_payload(port))
                     )
     inter = 1.0 / spec.rate_pps if spec.rate_pps > 0 else 0
     answered, _ = sr(packets, timeout=2, verbose=0, inter=inter)
@@ -81,9 +82,14 @@ def _sweep(spec: DiscoverySpec) -> list[tuple[Any, Any]]:
 
 def _classify(snd: Any, rcv: Any) -> DiscoveryResult | None:
     """Turn a (sent, received) scapy pair into a DiscoveryResult or None."""
-    from scapy.all import IP, TCP, UDP  # type: ignore
+    from scapy.all import IP, TCP, UDP, IPv6  # type: ignore
 
-    src = rcv[IP].src if IP in rcv else None
+    if IP in rcv:
+        src: str | None = rcv[IP].src
+    elif IPv6 in rcv:
+        src = rcv[IPv6].src
+    else:
+        src = None
     if src is None:
         return None
     if TCP in rcv:

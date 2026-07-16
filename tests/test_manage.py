@@ -49,8 +49,15 @@ def test_add_cloud_overlap_warns_but_still_adds(ws: str) -> None:
     assert str(net) in _cfg(ws).workspace.authorized_ranges
 
 
-def test_normalize_rejects_ipv6_and_junk(ws: str) -> None:
-    for bad in ["::1", "2001:db8::/32", "nope", ""]:
+def test_normalize_accepts_ipv6() -> None:
+    assert manage.normalize_target("::1") == "::1/128"
+    assert manage.normalize_target("2001:db8::/32") == "2001:db8::/32"
+    # Bare IPv6 host becomes a /128; canonicalized (compressed, lower-case).
+    assert manage.normalize_target("2001:DB8:0:0:0:0:0:1") == "2001:db8::1/128"
+
+
+def test_normalize_rejects_junk(ws: str) -> None:
+    for bad in ["nope", "", "  ", "999.1.1.1"]:
         with pytest.raises(manage.ManageError):
             manage.normalize_target(bad)
 

@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from ipaddress import IPv4Network
+from ipaddress import IPv4Network, IPv6Network
 from typing import Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
 class DiscoverySpec:
-    targets: list[IPv4Network]
+    targets: list[IPv4Network | IPv6Network]
     ports: list[int]
     tcp: bool = True
     udp: bool = False

@@ -18,7 +18,7 @@ import os
 import tempfile
 import tomllib
 from dataclasses import dataclass, field
-from ipaddress import IPv4Network, ip_network
+from ipaddress import ip_network
 from pathlib import Path
 
 from lodan import authz
@@ -78,20 +78,21 @@ def _save(workspace: str, cfg: Config) -> None:
 def normalize_target(raw: str) -> str:
     """Canonicalize an operator-supplied target into a stored CIDR string.
 
-    Accepts a bare IPv4 address (treated as a /32) or a CIDR. Host bits in a
-    CIDR are cleared (strict=False), matching how authz interprets the range.
-    IPv6 is rejected to stay consistent with the v1 IPv4-only scanner.
+    Accepts a bare IPv4/IPv6 address (a bare host becomes a /32 or /128) or a
+    CIDR of either family. Host bits in a CIDR are cleared (strict=False),
+    matching how authz interprets the range.
     """
     raw = raw.strip()
     if not raw:
         raise ManageError("empty target")
-    candidate = raw if "/" in raw else f"{raw}/32"
+    candidate = raw
+    if "/" not in raw:
+        # A bare address is a single host: /32 for IPv4, /128 for IPv6.
+        candidate = f"{raw}/128" if ":" in raw else f"{raw}/32"
     try:
         net = ip_network(candidate, strict=False)
     except ValueError as e:
         raise ManageError(f"invalid IP/CIDR {raw!r}: {e}") from None
-    if not isinstance(net, IPv4Network):
-        raise ManageError(f"only IPv4 is supported in v1: {raw!r}")
     return str(net)
 
 
