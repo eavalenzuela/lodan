@@ -222,6 +222,7 @@ def scan_cmd(
         f"{summary.services_probed} probed, "
         f"{summary.hosts_enriched} hosts enriched, "
         f"{summary.vulns_matched} CVE matches, "
+        f"{summary.findings} findings, "
         f"{summary.authz_rejections} authz-rejected"
     )
     if summary.diff_from is not None:
@@ -531,6 +532,181 @@ def favicon_label_cmd(
     finally:
         conn.close()
     console.print(f"[green]labeled[/] favicon {mmh3} → {label!r}")
+
+
+@app.command("findings")
+def findings_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    scan: Annotated[
+        int | None,
+        typer.Option("--scan", help="Limit to one scan id (default: every scan)."),
+    ] = None,
+    severity: Annotated[
+        str | None,
+        typer.Option("--severity", help="Filter: high | medium | low | info."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 200,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit JSONL instead of a table."),
+    ] = False,
+) -> None:
+    """Show exposure / misconfiguration findings derived from probe results."""
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+    if severity is not None and severity not in ("high", "medium", "low", "info"):
+        err.print(f"[red]--severity must be high|medium|low|info:[/] {severity!r}")
+        raise typer.Exit(1)
+
+    import json
+
+    from lodan import findings
+    from lodan.store.db import connect
+
+    conn = connect(workspace_db(workspace))
+    try:
+        rows = findings.iter_findings(conn, scan_id=scan, severity=severity, limit=limit)
+    finally:
+        conn.close()
+
+    if as_json:
+        for row in rows:
+            sys.stdout.write(json.dumps(row, default=str) + "\n")
+        return
+    if not rows:
+        console.print("[green]no findings[/]")
+        return
+
+    from rich.table import Table
+
+    _sev_style = {"high": "red", "medium": "yellow", "low": "cyan", "info": "white"}
+    table = Table(show_lines=False)
+    for col in ("severity", "category", "ip", "port", "title"):
+        table.add_column(col)
+    for row in rows:
+        style = _sev_style.get(row["severity"], "white")
+        table.add_row(
+            f"[{style}]{row['severity']}[/]",
+            row["category"],
+            row["ip"],
+            str(row["port"]) if row["port"] is not None else "",
+            row["title"],
+        )
+    console.print(table)
+    console.print(f"[green]{len(rows)} finding(s)[/]")
+
+
+@app.command("report")
+def report_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    scan: Annotated[
+        int | None,
+        typer.Option("--scan", help="Scan id to report (default: latest completed)."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Bundle directory (default: ./lodan-report-<ws>-scan<id>)."),
+    ] = None,
+) -> None:
+    """Render a scan into a self-contained, checksummed report bundle.
+
+    Writes report.html + services/hosts/vulns CSV + findings.sarif + a
+    manifest.json that sha256-checksums every file, so findings can be shared
+    offline without the workspace DB.
+    """
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+
+    from lodan import __version__, report
+    from lodan.store.db import connect
+
+    conn = connect(workspace_db(workspace))
+    try:
+        scan_id = scan if scan is not None else report.latest_completed_scan(conn)
+        if scan_id is None:
+            err.print("[yellow]no completed scan to report[/] (run `lodan scan` first)")
+            raise typer.Exit(1)
+        out = output or Path(f"lodan-report-{workspace}-scan{scan_id}")
+        try:
+            out_dir, files = report.generate(conn, scan_id, out, __version__)
+        except report.ReportError as e:
+            err.print(f"[red]{e}[/]")
+            raise typer.Exit(1) from None
+    finally:
+        conn.close()
+
+    console.print(
+        f"[green]report written[/] to {out_dir}/ "
+        f"({len(files)} files: {', '.join(files)})"
+    )
+
+
+@app.command("authz-ledger")
+def authz_ledger_cmd(
+    workspace: Annotated[str, typer.Argument(help="Workspace name.")],
+    scan: Annotated[
+        int | None,
+        typer.Option("--scan", help="Limit to one scan id (default: every scan)."),
+    ] = None,
+    decision: Annotated[
+        str | None,
+        typer.Option("--decision", help="Filter: 'authorized' or 'refused'."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 200,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit JSONL instead of a table."),
+    ] = False,
+) -> None:
+    """Show the immutable authorization ledger — what each scan was cleared to
+    touch, and every out-of-scope target it refused."""
+    if not workspace_config(workspace).exists():
+        err.print(f"[red]no such workspace:[/] {workspace}")
+        raise typer.Exit(1)
+    if decision is not None and decision not in ("authorized", "refused"):
+        err.print(f"[red]--decision must be 'authorized' or 'refused':[/] {decision!r}")
+        raise typer.Exit(1)
+
+    import json
+
+    from lodan.store import writer
+    from lodan.store.db import connect
+
+    conn = connect(workspace_db(workspace))
+    try:
+        rows = writer.iter_authz_ledger(
+            conn, scan_id=scan, decision=decision, limit=limit
+        )
+    finally:
+        conn.close()
+
+    if as_json:
+        for row in rows:
+            sys.stdout.write(json.dumps(row, default=str) + "\n")
+        return
+
+    if not rows:
+        console.print("[yellow]ledger empty[/]")
+        return
+    from rich.table import Table
+
+    table = Table(show_lines=False)
+    for col in ("ts", "scan", "operator", "decision", "kind", "target", "port", "reason"):
+        table.add_column(col)
+    for row in rows:
+        style = "red" if row["decision"] == "refused" else "green"
+        table.add_row(
+            row["ts"],
+            str(row["scan_id"]) if row["scan_id"] is not None else "",
+            row["operator"] or "",
+            f"[{style}]{row['decision']}[/]",
+            row["scope_kind"],
+            row["target"],
+            str(row["port"]) if row["port"] is not None else "",
+            (row["reason"] or "")[:60],
+        )
+    console.print(table)
+    console.print(f"[green]{len(rows)} ledger entr(ies)[/]")
 
 
 def main() -> None:
