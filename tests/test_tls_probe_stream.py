@@ -121,3 +121,29 @@ def test_parse_stream_counts_chain(cert_count: int) -> None:
     raw = _build_response(_server_hello_body(), [der] * cert_count)
     result = parse_stream(ch, raw)
     assert result.raw["cert_count"] == cert_count
+
+
+def test_parse_stream_malformed_cert_keeps_ja3s_and_fingerprint() -> None:
+    """A garbage leaf cert must not sink the ServerHello: JA3S survives, the
+    raw sha256 fingerprint survives, and the parse error is surfaced."""
+    ch = build_client_hello()
+    raw = _build_response(_server_hello_body(cipher=0xc02f), [b"NOT-VALID-DER"])
+    result = parse_stream(ch, raw)
+    assert result.service == "tls"
+    assert result.ja3s is not None            # ServerHello still parsed
+    assert result.cert_fingerprint is not None  # sha256 of raw DER kept
+    assert result.cert_sans is None
+    assert result.raw.get("cert_error")
+    assert "cert_subject" not in result.raw
+
+
+def test_parse_stream_malformed_server_hello_keeps_client_ja3() -> None:
+    """A truncated ServerHello body degrades to a client-fingerprint-only
+    result rather than raising."""
+    ch = build_client_hello()
+    raw = _record(22, _handshake(2, b"\x03\x03too-short"))  # < 40-byte SH body
+    result = parse_stream(ch, raw)
+    assert result.ja3 == ch.ja3
+    assert result.ja3s is None
+    assert "malformed ServerHello" in (result.banner or "")
+    assert result.raw.get("server_hello_error")

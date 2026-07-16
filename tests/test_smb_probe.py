@@ -45,6 +45,18 @@ def test_parse_truncated() -> None:
     assert "truncated" in (result.banner or "")
 
 
+def test_parse_negotiate_never_crashes_on_truncation() -> None:
+    """Every truncation prefix of a valid NEGOTIATE response, plus junk and
+    oversized inputs, returns a best-effort ProbeResult without raising."""
+    valid = (FIXTURES / "neg_3_0_2_signing_required.bin").read_bytes()
+    for n in range(len(valid) + 1):
+        assert parse_negotiate(valid[:n]).service == "smb"
+    for junk in (b"", b"\xfe", b"\xfeSMB", b"not-smb-at-all", b"\xfeSMB" + b"\xff" * 200):
+        assert parse_negotiate(junk).service == "smb"
+    # Oversized: a huge but well-formed-enough header must not misbehave.
+    assert parse_negotiate(b"\xfeSMB" + b"\x00" * 70000).service == "smb"
+
+
 def test_build_request_has_correct_structure() -> None:
     pkt = _build_negotiate_request()
     # NetBIOS session service header is 4 bytes, SMB2 header is 64, NEGOTIATE body follows.

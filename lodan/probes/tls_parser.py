@@ -298,8 +298,11 @@ def parse_server_hello(body: bytes) -> ServerHelloParsed:
     pos += 2
     pos += 1  # compression_method
 
-    # TLS 1.0/1.1 servers may omit extensions entirely; in that case we stop.
-    if pos >= len(body):
+    # TLS 1.0/1.1 servers may omit the extensions block entirely; a malformed
+    # or truncated responder may also leave fewer than the 2 bytes the
+    # extensions-length field needs. Either way, treat it as "no extensions"
+    # rather than letting struct.unpack_from read past the end of the body.
+    if pos + 2 > len(body):
         return ServerHelloParsed(version=version, cipher=cipher, extensions=[])
 
     (ext_total,) = struct.unpack_from(">H", body, pos)
@@ -359,7 +362,10 @@ def extract_cert_chain(messages: list[tuple[int, bytes]]) -> list[bytes]:
         if len(body) < 3:
             return []
         total = _parse_u24(body, 0)
-        end = 3 + total
+        # A hostile or truncated Certificate message can claim a total that runs
+        # past the bytes we actually hold. Clamp to the buffer so the walk below
+        # never reads (via _parse_u24) or slices beyond the end.
+        end = min(3 + total, len(body))
         chain: list[bytes] = []
         pos = 3
         while pos + 3 <= end:

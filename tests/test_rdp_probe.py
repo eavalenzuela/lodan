@@ -48,6 +48,18 @@ def test_parse_unexpected_x224_code() -> None:
     assert "unexpected X.224" in (result.banner or "")
 
 
+def test_parse_response_never_crashes_on_truncation() -> None:
+    """Every truncation prefix of a valid Connection Confirm, plus junk and an
+    oversized packet, returns a best-effort ProbeResult without raising."""
+    valid = (FIXTURES / "cc_credssp_restricted_admin.bin").read_bytes()
+    for n in range(len(valid) + 1):
+        assert parse_response(valid[:n]).service == "rdp"
+    for junk in (b"", b"\x03", b"\x03\x00\xff\xff", b"\x03\x00\x00\x07\x02\xd0\x00", b"junk"):
+        assert parse_response(junk).service == "rdp"
+    # X.224 length indicator claims far more than the packet holds.
+    assert parse_response(b"\x03\x00\x00\x0b\xff\xd0\x00\x00\x00\x00\x00").service == "rdp"
+
+
 def test_build_cr_has_tpkt_and_x224_and_neg_req() -> None:
     pkt = build_cr()
     assert pkt[0] == 0x03  # TPKT version

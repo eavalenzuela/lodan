@@ -6,6 +6,7 @@ surface before they hit real servers.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import struct
@@ -214,6 +215,62 @@ def test_parse_server_hello_short_raises() -> None:
 
     with pytest.raises(ValueError):
         parse_server_hello(b"\x00" * 10)
+
+
+# ------------------------------------------------------------------
+# adversarial / malformed input hardening
+# ------------------------------------------------------------------
+
+
+def test_parse_server_hello_stray_byte_where_ext_length_belongs() -> None:
+    """A responder that leaves 1 byte where the 2-byte extensions-length field
+    belongs must be treated as 'no extensions', not crash with struct.error."""
+    body = (
+        b"\x03\x03" + b"\x00" * 32   # version + random
+        + b"\x01" + b"\xAA"          # session_id len=1 + 1 id byte
+        + b"\xc0\x2f"                # cipher
+        + b"\x00"                    # compression
+        + b"\x00"                    # lone stray byte (needs 2 for ext length)
+    )
+    parsed = parse_server_hello(body)
+    assert parsed.cipher == 0xc02f
+    assert parsed.extensions == []
+
+
+def test_extract_cert_chain_oversized_total_is_clamped() -> None:
+    """A Certificate message whose declared total runs past the buffer must not
+    IndexError; the walk is clamped to the bytes actually present."""
+    # total claims 0xFFFFFF; then a cert header claiming 16 bytes but only 2 follow.
+    cert_body = _u24(0xFFFFFF) + _u24(0x10) + b"\x01\x02"
+    assert extract_cert_chain([(HS_CERTIFICATE, cert_body)]) == []
+
+
+def test_extract_cert_chain_partial_last_cert_dropped() -> None:
+    """A truncated trailing cert is dropped, earlier complete certs survive."""
+    good = b"FULL-CERT"
+    inner = _u24(len(good)) + good + _u24(100) + b"short"  # 2nd claims 100, has 5
+    cert_body = _u24(len(inner)) + inner
+    assert extract_cert_chain([(HS_CERTIFICATE, cert_body)]) == [good]
+
+
+def test_parsers_never_crash_on_truncation() -> None:
+    """Every truncation prefix of a well-formed ServerHello+Certificate stream
+    parses without an uncaught (non-ValueError) exception."""
+    sh = _handshake(HS_SERVER_HELLO, _fake_server_hello(
+        extensions=[(EXT_SUPPORTED_VERSIONS, struct.pack(">H", 0x0304))],
+    ))
+    cert = _handshake(HS_CERTIFICATE, _fake_certificate([b"der-a", b"der-b"]))
+    full = _record(TLS_CT_HANDSHAKE, sh + cert)
+    for n in range(len(full) + 1):
+        prefix = full[:n]
+        messages = collect_handshake_messages(prefix)  # must never raise
+        sh_body = find_server_hello(messages)
+        if sh_body is not None:
+            # A controlled "can't trust this" ValueError is acceptable; any
+            # other exception type is a hardening regression.
+            with contextlib.suppress(ValueError):
+                parse_server_hello(sh_body)
+        extract_cert_chain(messages)  # must never raise
 
 
 # ------------------------------------------------------------------

@@ -114,7 +114,26 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
                 "ja4_ro": ch.ja4_ro,
             },
         )
-    sh = parse_server_hello(sh_body)
+    try:
+        sh = parse_server_hello(sh_body)
+    except ValueError as e:
+        # A malformed/truncated ServerHello shouldn't cost us the client-side
+        # JA3/JA4 we always have from our own ClientHello. Degrade gracefully.
+        return ProbeResult(
+            service="tls",
+            banner=f"tls: malformed ServerHello ({e})",
+            ja3=ch.ja3,
+            ja4=ch.ja4,
+            raw={
+                "response_bytes": len(raw),
+                "server_hello_error": str(e),
+                "ja3_string": ch.ja3_string,
+                "ja4": ch.ja4,
+                "ja4_r": ch.ja4_r,
+                "ja4_o": ch.ja4_o,
+                "ja4_ro": ch.ja4_ro,
+            },
+        )
     chain = extract_cert_chain(messages)
 
     cert_fingerprint: str | None = None
@@ -124,15 +143,21 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
     fingerprint_sha1: str | None = None
     not_before: str | None = None
     not_after: str | None = None
+    cert_error: str | None = None
     if chain:
-        leaf = x509.load_der_x509_certificate(chain[0])
+        # sha256 of the raw leaf DER never fails and stays a useful pivot even
+        # if the cert itself won't parse, so compute it before the fragile part.
         cert_fingerprint = hashlib.sha256(chain[0]).hexdigest()
-        sans = _extract_sans(leaf) or None
-        subject = leaf.subject.rfc4514_string()
-        issuer = leaf.issuer.rfc4514_string()
-        fingerprint_sha1 = leaf.fingerprint(hashes.SHA1()).hex()
-        not_before = leaf.not_valid_before_utc.isoformat()
-        not_after = leaf.not_valid_after_utc.isoformat()
+        try:
+            leaf = x509.load_der_x509_certificate(chain[0])
+            sans = _extract_sans(leaf) or None
+            subject = leaf.subject.rfc4514_string()
+            issuer = leaf.issuer.rfc4514_string()
+            fingerprint_sha1 = leaf.fingerprint(hashes.SHA1()).hex()
+            not_before = leaf.not_valid_before_utc.isoformat()
+            not_after = leaf.not_valid_after_utc.isoformat()
+        except Exception as e:  # noqa: BLE001 — hostile/broken DER must not sink the result
+            cert_error = str(e) or type(e).__name__
 
     banner_parts: list[str] = [
         f"{_version_label(sh.version)}",
@@ -156,7 +181,9 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
         "server_extensions": sh.extensions,
         "cert_count": len(chain),
     }
-    if chain:
+    if cert_error is not None:
+        raw_fields["cert_error"] = cert_error
+    if chain and cert_error is None:
         raw_fields.update({
             "cert_subject": subject,
             "cert_issuer": issuer,
