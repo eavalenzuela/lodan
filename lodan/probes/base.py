@@ -29,11 +29,9 @@ class ProbeResult:
     def raw_json(self) -> str:
         return json.dumps(self.raw, default=str, sort_keys=True)
 
-    def sans_json(self) -> str | None:
-        return json.dumps(self.cert_sans) if self.cert_sans is not None else None
-
-    def tech_json(self) -> str | None:
-        return json.dumps(self.tech) if self.tech is not None else None
+    # cert_sans / tech are serialized (and canonicalized) at the storage
+    # boundary by lodan.normalize; ProbeResult deliberately keeps the raw
+    # values so nothing writes an un-normalized list by accident.
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

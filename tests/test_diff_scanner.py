@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from lodan.diff.scanner import compute_and_store
+from lodan.probes.base import ProbeResult
 from lodan.store import writer
 from lodan.store.db import bootstrap, connect
 
@@ -35,6 +36,42 @@ def _open_two_scans(conn) -> tuple[int, int]:
     b = writer.open_scan(conn, "w", ["10.0.0.0/24"]).scan_id
     writer.finish_scan(conn, writer.ScanHandle(b, "w"))
     return a, b
+
+
+def _probe_service(conn, scan_id: int, ip: str, port: int, result: ProbeResult) -> None:
+    """Write a service through the real probe-merge path so normalization runs."""
+    handle = writer.ScanHandle(scan_id, "w")
+    writer.upsert_discovered_service(conn, handle, ip, port, "tcp")
+    writer.update_service_from_probe(conn, handle, ip, port, "tcp", result)
+
+
+def test_cosmetic_only_rescan_is_not_a_changed_diff(db) -> None:
+    """Same service, banner differing only by whitespace and tech only by case
+    and order, must not register as `changed` once both are normalized."""
+    a, b = _open_two_scans(db)
+    _probe_service(db, a, "10.0.0.5", 443, ProbeResult(
+        service="https", banner="nginx/1.25.3  (Ubuntu)\r\n", tech=["Nginx", "PHP"],
+    ))
+    _probe_service(db, b, "10.0.0.5", 443, ProbeResult(
+        service="https", banner="nginx/1.25.3 (Ubuntu)", tech=["php", "nginx"],
+    ))
+
+    counts = compute_and_store(db, a, b)
+    assert counts.changed == 0
+
+
+def test_genuine_change_still_diffs(db) -> None:
+    """A real tech change survives normalization and is reported."""
+    a, b = _open_two_scans(db)
+    _probe_service(db, a, "10.0.0.5", 443, ProbeResult(
+        service="https", banner="nginx/1.25.3", tech=["nginx"],
+    ))
+    _probe_service(db, b, "10.0.0.5", 443, ProbeResult(
+        service="https", banner="nginx/1.25.3", tech=["nginx", "wordpress"],
+    ))
+
+    counts = compute_and_store(db, a, b)
+    assert counts.changed == 1
 
 
 def test_new_and_gone_services(db) -> None:

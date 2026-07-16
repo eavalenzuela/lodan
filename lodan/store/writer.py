@@ -11,6 +11,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from lodan import normalize
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -60,6 +62,65 @@ def record_error(
     )
 
 
+def record_authz_decision(
+    conn: sqlite3.Connection,
+    *,
+    scan_id: int | None,
+    workspace: str,
+    operator: str | None,
+    decision: str,
+    scope_kind: str,
+    target: str,
+    port: int | None = None,
+    proto: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Append one row to the immutable authorization ledger.
+
+    `decision` is 'authorized' (a CIDR/cloud prefix we were cleared to scan) or
+    'refused' (an out-of-scope target we declined to touch). The ledger is
+    append-only and independent of scan bookkeeping — see schema.sql.
+    """
+    conn.execute(
+        "INSERT INTO authz_ledger "
+        "(ts, workspace, scan_id, operator, decision, scope_kind, target, port, proto, reason) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (_now(), workspace, scan_id, operator, decision, scope_kind, target, port, proto, reason),
+    )
+
+
+_LEDGER_COLUMNS = (
+    "id", "ts", "workspace", "scan_id", "operator",
+    "decision", "scope_kind", "target", "port", "proto", "reason",
+)
+
+
+def iter_authz_ledger(
+    conn: sqlite3.Connection,
+    *,
+    scan_id: int | None = None,
+    decision: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Read the authorization ledger, oldest first. Optional scan/decision filters."""
+    sql = f"SELECT {', '.join(_LEDGER_COLUMNS)} FROM authz_ledger"
+    clauses: list[str] = []
+    params: list[object] = []
+    if scan_id is not None:
+        clauses.append("scan_id = ?")
+        params.append(scan_id)
+    if decision is not None:
+        clauses.append("decision = ?")
+        params.append(decision)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [dict(zip(_LEDGER_COLUMNS, row, strict=True)) for row in conn.execute(sql, params)]
+
+
 def upsert_discovered_service(
     conn: sqlite3.Connection,
     handle: ScanHandle,
@@ -102,16 +163,16 @@ def update_service_from_probe(
         """,
         (
             result.service,
-            result.banner,
-            result.cert_fingerprint,
-            result.sans_json(),
+            normalize.banner(result.banner),
+            normalize.fingerprint(result.cert_fingerprint),
+            normalize.sans_json(result.cert_sans),
             result.ja3,
             result.ja3s,
             result.ja4,
             result.ja4s,
             result.ssh_hostkey,
             result.favicon_mmh3,
-            result.tech_json(),
+            normalize.tech_json(result.tech),
             result.raw_json() if result.raw else None,
             handle.scan_id,
             ip,
