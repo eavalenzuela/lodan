@@ -69,6 +69,28 @@ def test_dump_renders_real_retention_when_set() -> None:
     assert "keep_last_n" not in t  # unset knob omitted
 
 
+def test_notify_commented_while_disabled() -> None:
+    t = default_config_toml("w", ["10.0.0.0/24"])
+    assert "# [notify]" in t          # discoverable but inert
+    assert "[notify]\n" not in t       # no active table
+    # Still parses, and notify stays at defaults (disabled).
+    c = Config.model_validate(tomllib.loads(t))
+    assert c.notify.enabled is False
+
+
+def test_notify_renders_real_table_when_set() -> None:
+    c = _cfg()
+    c.notify.webhook_url = "https://hooks.example.com/lodan"
+    t = dump_config_toml(c)
+    assert "# [notify]" not in t
+    assert "[notify]" in t
+    assert 'webhook_url = "https://hooks.example.com/lodan"' in t
+    # Round-trips back to an enabled webhook.
+    c2 = Config.model_validate(tomllib.loads(t))
+    assert c2.notify.webhook_enabled is True
+    assert c2.notify.webhook_url == "https://hooks.example.com/lodan"
+
+
 def test_config_dump_method_matches_module_fn() -> None:
     c = _cfg()
     assert c.dump() == dump_config_toml(c)

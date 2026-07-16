@@ -56,6 +56,31 @@ class DiffBlock(BaseModel):
     default_from: str = "prev"
 
 
+class NotifyBlock(BaseModel):
+    """Opt-in change notifications. A sink is enabled by being non-empty; both
+    are off by default, so a fresh workspace never phones home."""
+
+    webhook_url: str = ""            # POST the diff summary as JSON; "" disables
+    email_to: str = ""               # comma-separated recipients; "" disables
+    email_from: str = "lodan@localhost"
+    smtp_host: str = "localhost"
+    smtp_port: int = 25
+    smtp_starttls: bool = False
+    timeout_s: float = 10.0
+
+    @property
+    def webhook_enabled(self) -> bool:
+        return bool(self.webhook_url.strip())
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.email_to.strip())
+
+    @property
+    def enabled(self) -> bool:
+        return self.webhook_enabled or self.email_enabled
+
+
 class RetentionBlock(BaseModel):
     keep_last_n: int | None = None
     keep_monthly: int | None = None
@@ -66,6 +91,7 @@ class Config(BaseModel):
     scan: ScanBlock = Field(default_factory=ScanBlock)
     enrich: EnrichBlock = Field(default_factory=EnrichBlock)
     diff: DiffBlock = Field(default_factory=DiffBlock)
+    notify: NotifyBlock = Field(default_factory=NotifyBlock)
     retention: RetentionBlock = Field(default_factory=RetentionBlock)
 
     @classmethod
@@ -103,6 +129,35 @@ def _toml_num(n: float | int) -> str:
     if isinstance(n, float) and n.is_integer():
         return str(int(n))
     return str(n)
+
+
+def _notify_lines(n: NotifyBlock) -> list[str]:
+    """Render the [notify] block. Commented out (a discoverable example) while
+    both sinks are disabled, so the default config never phones home; a real
+    table once webhook_url or email_to is set."""
+    if not n.enabled:
+        return [
+            "# [notify]  — fire a diff summary on a rescan that finds changes",
+            '# webhook_url = "https://hooks.example.com/lodan"   # POSTs JSON',
+            '# email_to = "team@example.com"                     # comma-separated',
+            '# email_from = "lodan@localhost"',
+            '# smtp_host = "localhost"',
+            "# smtp_port = 25",
+            "# smtp_starttls = false            # SMTP creds via $LODAN_SMTP_USERNAME/_PASSWORD",
+            "# timeout_s = 10",
+            "",
+        ]
+    return [
+        "[notify]",
+        f"webhook_url = {_toml_str(n.webhook_url)}",
+        f"email_to = {_toml_str(n.email_to)}",
+        f"email_from = {_toml_str(n.email_from)}",
+        f"smtp_host = {_toml_str(n.smtp_host)}",
+        f"smtp_port = {_toml_num(n.smtp_port)}",
+        f"smtp_starttls = {_toml_bool(n.smtp_starttls)}",
+        f"timeout_s = {_toml_num(n.timeout_s)}",
+        "",
+    ]
 
 
 def dump_config_toml(cfg: Config) -> str:
@@ -143,6 +198,8 @@ def dump_config_toml(cfg: Config) -> str:
         f"default_from = {_toml_str(cfg.diff.default_from)}",
         "",
     ]
+
+    lines += _notify_lines(cfg.notify)
 
     ret = cfg.retention
     if ret.keep_last_n is None and ret.keep_monthly is None:
