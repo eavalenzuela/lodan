@@ -40,12 +40,43 @@ def _migrate_services_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE services ADD COLUMN {name} {col_type}")
 
 
+# Single-column pivot indexes superseded by the partial composite ones in
+# schema.sql. DROP IF EXISTS is a cheap no-op once they're gone (and on fresh
+# DBs that never had them), so this is safe to run on every ensure_schema.
+_RETIRED_INDEXES = (
+    "services_cert_fp",
+    "services_favicon",
+    "services_ja3s",
+    "services_ja4s",
+    "services_ssh_hostkey",
+)
+
+
+def _drop_retired_indexes(conn: sqlite3.Connection) -> None:
+    for name in _RETIRED_INDEXES:
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Apply schema.sql idempotently to an open connection.
+
+    schema.sql is all `CREATE ... IF NOT EXISTS`, so this is safe to run on a
+    fresh or existing DB. Callers that hold a live connection (e.g. the scan
+    orchestrator) run this so newly-shipped tables — like `authz_ledger` — exist
+    on workspace DBs created before that table was added, without waiting for a
+    re-`init`. (A first-class schema_version + migration runner is a separate
+    planned item; this is the idempotent stopgap.)
+    """
+    _migrate_services_columns(conn)
+    conn.executescript(schema_sql())
+    _drop_retired_indexes(conn)
+
+
 def bootstrap(path: Path) -> None:
     """Create the DB file and apply schema.sql. Safe to run on an existing DB."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(path)
     try:
-        _migrate_services_columns(conn)
-        conn.executescript(schema_sql())
+        ensure_schema(conn)
     finally:
         conn.close()

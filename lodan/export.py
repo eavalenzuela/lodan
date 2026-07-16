@@ -20,7 +20,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any, TextIO
 
-_TABLES = ("scans", "hosts", "services", "vulns")
+_TABLES = ("scans", "hosts", "services", "vulns", "authz_ledger", "findings")
 _JSON_COLUMNS: dict[str, set[str]] = {
     "services": {"cert_sans", "tech", "raw"},
 }

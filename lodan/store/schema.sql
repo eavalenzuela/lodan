@@ -46,11 +46,32 @@ CREATE TABLE IF NOT EXISTS services (
 );
 
 CREATE INDEX IF NOT EXISTS services_ip_port ON services(ip, port);
-CREATE INDEX IF NOT EXISTS services_cert_fp ON services(cert_fingerprint);
-CREATE INDEX IF NOT EXISTS services_favicon ON services(favicon_mmh3);
-CREATE INDEX IF NOT EXISTS services_ja3s    ON services(ja3s);
-CREATE INDEX IF NOT EXISTS services_ja4s    ON services(ja4s);
-CREATE INDEX IF NOT EXISTS services_ssh_hostkey ON services(ssh_hostkey);
+
+-- Hot-pivot indexes. Each is:
+--   * PARTIAL (WHERE col IS NOT NULL) — the pivot columns are set only during
+--     the probe phase, so the vast majority of rows (every bare discovery row,
+--     every non-matching service) are NULL. A partial index skips those, so it
+--     stays small AND isn't touched by the high-volume discovery INSERTs, which
+--     all carry NULL here. This is the write-amplification win for big ranges.
+--   * COMPOSITE (col, scan_id, ip, port) — the pivot query is
+--     `WHERE col = ? ORDER BY scan_id DESC, ip, port`; carrying the sort keys
+--     in the index lets it resolve the equality and the ordering from the index
+--     (only service/banner need a row fetch), so a pivot on a common value
+--     doesn't fall back to a full sort.
+-- Retired single-column predecessors (services_ja3s, services_cert_fp, ...) are
+-- dropped by store.db.ensure_schema on upgraded workspaces.
+-- scan_id is DESC to match the pivot's `ORDER BY scan_id DESC, ip, port`
+-- exactly, so the ordering is resolved straight from the index (no temp b-tree).
+CREATE INDEX IF NOT EXISTS services_pivot_cert_fp
+  ON services(cert_fingerprint, scan_id DESC, ip, port) WHERE cert_fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_favicon
+  ON services(favicon_mmh3, scan_id DESC, ip, port) WHERE favicon_mmh3 IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_ja3s
+  ON services(ja3s, scan_id DESC, ip, port) WHERE ja3s IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_ja4s
+  ON services(ja4s, scan_id DESC, ip, port) WHERE ja4s IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_hostkey
+  ON services(ssh_hostkey, scan_id DESC, ip, port) WHERE ssh_hostkey IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS vulns (
   scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -72,6 +93,59 @@ CREATE TABLE IF NOT EXISTS scan_errors (
   error TEXT NOT NULL,
   ts TEXT NOT NULL
 );
+
+-- Authorization ledger: an immutable, append-only record of every authz
+-- decision — the scope we were authorized to touch, and every out-of-scope
+-- target we refused. Deliberately independent of scan bookkeeping: `scan_id`
+-- correlates to scans(id) but is NOT a cascading foreign key, so pruning a
+-- scan (retention) never erases the accountability record of what that scan
+-- touched or refused. Rows are self-describing (workspace, operator, ts are
+-- denormalized) so the ledger stays meaningful after its scan row is gone.
+-- Immutability is enforced by the triggers below: inserts only, no
+-- updates/deletes. This is the durable "what did we touch and what did we
+-- refuse" trail, separate from the transient scan_errors bookkeeping.
+CREATE TABLE IF NOT EXISTS authz_ledger (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  scan_id INTEGER,               -- correlates to scans(id); intentionally NOT a
+                                 -- cascading FK (survives retention prune)
+  operator TEXT,
+  decision TEXT NOT NULL,        -- authorized | refused
+  scope_kind TEXT NOT NULL,      -- cidr | cloud | target
+  target TEXT NOT NULL,          -- authorized CIDR, or the refused IP
+  port INTEGER,
+  proto TEXT,
+  reason TEXT                    -- cloud-opt-in justification, or refusal reason
+);
+
+CREATE INDEX IF NOT EXISTS authz_ledger_scan ON authz_ledger(scan_id);
+CREATE INDEX IF NOT EXISTS authz_ledger_decision ON authz_ledger(decision, ts);
+
+CREATE TRIGGER IF NOT EXISTS authz_ledger_no_update
+BEFORE UPDATE ON authz_ledger BEGIN
+  SELECT RAISE(ABORT, 'authz_ledger is append-only (no updates)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authz_ledger_no_delete
+BEFORE DELETE ON authz_ledger BEGIN
+  SELECT RAISE(ABORT, 'authz_ledger is append-only (no deletes)');
+END;
+
+-- Derived exposure/misconfiguration findings for a scan. Computed from the
+-- probe results (services.service + services.raw) after probing/enrichment;
+-- cascade-deleted with the scan like the other per-scan derived tables.
+CREATE TABLE IF NOT EXISTS findings (
+  scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+  ip TEXT NOT NULL,
+  port INTEGER,
+  category TEXT NOT NULL,         -- cleartext-admin | no-tls | unauth-service | tls-cert | ...
+  severity TEXT NOT NULL,         -- high | medium | low | info
+  title TEXT NOT NULL,
+  detail BLOB                     -- JSON, category-specific
+);
+
+CREATE INDEX IF NOT EXISTS findings_scan ON findings(scan_id, severity);
 
 CREATE TABLE IF NOT EXISTS scan_diffs (
   from_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
