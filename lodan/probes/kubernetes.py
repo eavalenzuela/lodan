@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from lodan import __version__
+from lodan import __version__, normalize
 from lodan.probes.base import ProbeResult
 
 _DEFAULT_K8S_PORTS = frozenset({6443, 10250, 10255, 10257, 10259})
@@ -35,7 +35,7 @@ class KubernetesProbe:
 async def fetch(ip: str, port: int, timeout: float) -> dict[str, Any]:
     # K8s endpoints are TLS by default, except the legacy 10255 read-only kubelet.
     scheme = "http" if port == 10255 else "https"
-    base = f"{scheme}://{ip}:{port}"
+    base = f"{scheme}://{normalize.host_for_url(ip)}:{port}"
     out: dict[str, Any] = {}
     async with httpx.AsyncClient(
         verify=False,

@@ -24,16 +24,28 @@ def clear_registry() -> None:
 
 
 def register_defaults() -> None:
+    from lodan.probes.amqp import AMQPProbe
+    from lodan.probes.dns import DNSProbe
     from lodan.probes.docker import DockerProbe
+    from lodan.probes.elastic import ElasticProbe
+    from lodan.probes.ftp import FTPProbe
     from lodan.probes.http import HTTPProbe
+    from lodan.probes.imap import IMAPProbe
     from lodan.probes.kubernetes import KubernetesProbe
     from lodan.probes.mongo import MongoProbe
     from lodan.probes.mqtt import MQTTProbe
+    from lodan.probes.mysql import MySQLProbe
+    from lodan.probes.pop3 import POP3Probe
+    from lodan.probes.postgres import PostgresProbe
     from lodan.probes.rdp import RDPProbe
     from lodan.probes.redis import RedisProbe
+    from lodan.probes.rsync import RsyncProbe
     from lodan.probes.smb import SMBProbe
+    from lodan.probes.smtp import SMTPProbe
     from lodan.probes.ssh import SSHProbe
+    from lodan.probes.telnet import TelnetProbe
     from lodan.probes.tls import TLSProbe
+    from lodan.probes.vnc import VNCProbe
 
     clear_registry()
     register("tls", TLSProbe)
@@ -46,6 +58,18 @@ def register_defaults() -> None:
     register("mongo", MongoProbe)
     register("docker", DockerProbe)
     register("kubernetes", KubernetesProbe)
+    register("smtp", SMTPProbe)
+    register("ftp", FTPProbe)
+    register("dns", DNSProbe)
+    register("elastic", ElasticProbe)
+    register("imap", IMAPProbe)
+    register("pop3", POP3Probe)
+    register("postgres", PostgresProbe)
+    register("mysql", MySQLProbe)
+    register("vnc", VNCProbe)
+    register("telnet", TelnetProbe)
+    register("rsync", RsyncProbe)
+    register("amqp", AMQPProbe)
 
 
 def pick_probes(port: int, proto: str = "tcp") -> list[Probe]:

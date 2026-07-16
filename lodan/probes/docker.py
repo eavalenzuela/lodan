@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from lodan import __version__
+from lodan import __version__, normalize
 from lodan.probes.base import ProbeResult
 
 _DEFAULT_DOCKER_PORTS = frozenset({2375, 2376})
@@ -34,7 +34,7 @@ class DockerProbe:
 
 async def fetch(ip: str, port: int, timeout: float) -> dict[str, Any] | None:
     scheme = "https" if port in _TLS_PORTS else "http"
-    url = f"{scheme}://{ip}:{port}/version"
+    url = f"{scheme}://{normalize.host_for_url(ip)}:{port}/version"
     try:
         async with httpx.AsyncClient(
             verify=False,

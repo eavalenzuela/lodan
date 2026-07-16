@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 import mmh3
 
-from lodan import __version__
+from lodan import __version__, normalize
 from lodan.enrich import tech_signatures
 from lodan.probes.base import ProbeResult
 
@@ -53,7 +53,7 @@ def _scheme_for_port(port: int) -> str:
 
 async def fetch(ip: str, port: int, timeout: float) -> HTTPCapture:
     scheme = _scheme_for_port(port)
-    base = f"{scheme}://{ip}:{port}"
+    base = f"{scheme}://{normalize.host_for_url(ip)}:{port}"
     headers = {"User-Agent": _USER_AGENT, "Accept": "*/*"}
     async with httpx.AsyncClient(
         verify=False,
