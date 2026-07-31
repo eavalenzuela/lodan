@@ -30,6 +30,8 @@ _LABELS = (
     ("path_changed", "path/stack changed"),
     ("topology_change", "topology changed"),
     ("risk_increased", "risk increased"),
+    ("new_exposure", "new exposure(s)"),
+    ("gone_exposure", "exposure(s) cleared"),
 )
 
 

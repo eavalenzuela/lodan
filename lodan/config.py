@@ -47,6 +47,12 @@ class ScanBlock(BaseModel):
     # multiply anyone's traffic unless they asked for it.
     tls_matrix: bool = True
     jarm: bool = False
+    # SNMPv2c has no bannerable handshake, so checking whether SNMP is exposed
+    # necessarily carries a community string. lodan sends only the RFC-default
+    # `public`, once, and treats a response as the exposure finding itself —
+    # but because that is a default access token rather than a bannergrab, it
+    # is off unless the operator turns it on.
+    snmp: bool = False
 
 
 class EnrichBlock(BaseModel):

@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS services (
   clock_key TEXT,                 -- bucketed boot-time estimate from TSval
   os_guess TEXT,                  -- distro/OS mined from this service's version string
   jarm TEXT,                      -- JARM TLS-configuration fingerprint
+  -- Identity pivots from the UDP fleet. netbios_name and mac_oui are stable
+  -- cross-scan identities for hosts with no useful TCP banner.
+  netbios_name TEXT,
+  mac_oui TEXT,
+  ike_vendor TEXT,
+  amplification REAL,             -- response/request byte ratio (NTP, memcached)
   PRIMARY KEY (scan_id, ip, port, proto)
 );
 
@@ -148,6 +154,10 @@ CREATE INDEX IF NOT EXISTS services_pivot_clock_key
   ON services(clock_key, scan_id DESC, ip, port) WHERE clock_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS services_pivot_jarm
   ON services(jarm, scan_id DESC, ip, port) WHERE jarm IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_netbios
+  ON services(netbios_name, scan_id DESC, ip, port) WHERE netbios_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_mac_oui
+  ON services(mac_oui, scan_id DESC, ip, port) WHERE mac_oui IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS vulns (
   scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,

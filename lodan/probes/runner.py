@@ -30,6 +30,10 @@ class ProbeBudget:
     #: runs; every other probe ignores them.
     tls_matrix: bool = True
     jarm: bool = False
+    #: SNMP is the one probe that must present a community string (SNMPv2c has
+    #: no bannerable handshake), so it requires an explicit opt-in rather than
+    #: running by default. See probes/snmp.py for the full rationale.
+    snmp: bool = False
 
 
 async def run_probes(
@@ -52,6 +56,8 @@ async def run_probes(
             if getattr(probe, "name", None) == "tls":
                 probe.do_matrix = budget.tls_matrix
                 probe.do_jarm = budget.jarm
+            if getattr(probe, "name", None) == "snmp" and not budget.snmp:
+                continue
             tasks.append(
                 asyncio.create_task(
                     _run_one(conn, handle, probe, ip, port, proto, sem_global, sem_per_host, budget)

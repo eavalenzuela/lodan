@@ -310,7 +310,8 @@ def diff_cmd(
         f"{counts.changed} changed, {counts.new_cert} new certs, "
         f"{counts.new_host} new hosts, {counts.path_changed} path changed, "
         f"{counts.topology_change} topology changed, "
-        f"{counts.risk_increased} risk increased ({counts.total} total)"
+        f"{counts.risk_increased} risk increased, "
+        f"{counts.new_exposure} new exposures ({counts.total} total)"
     )
 
 

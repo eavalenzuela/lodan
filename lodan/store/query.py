@@ -10,6 +10,8 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
              | os_guess | device_type | nat_suspected | min_backend_count
              | jarm | chain_cert | chain_issuer
              | kev | priority | epss | eol
+             | netbios | mac_oui | ike_vendor | amp
+             | finding | severity
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -41,6 +43,8 @@ _VALID_KEYS = {
     "os_guess", "device_type", "nat_suspected", "min_backend_count",
     "jarm", "chain_cert", "chain_issuer",
     "kev", "priority", "epss", "eol",
+    "netbios", "mac_oui", "ike_vendor", "amp",
+    "finding", "severity",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -206,6 +210,24 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
             [threshold],
         )
 
+    if key in ("finding", "severity"):
+        # Exposure findings are the headline recon output, so they deserve a
+        # first-class facet rather than only being reachable via `lodan
+        # findings`. Both join out to the findings table.
+        column = "category" if key == "finding" else "severity"
+        if "*" in value:
+            return (
+                "(services.scan_id, services.ip, services.port) IN "
+                f"(SELECT scan_id, ip, port FROM findings "
+                f"WHERE COALESCE({column},'') LIKE ?)",
+                [value.replace("*", "%")],
+            )
+        return (
+            "(services.scan_id, services.ip, services.port) IN "
+            f"(SELECT scan_id, ip, port FROM findings WHERE {column} = ?)",
+            [value.lower()],
+        )
+
     if key == "eol":
         if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
             raise QueryError(f"eol: expected true/false, got {value!r}")
@@ -274,7 +296,25 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
             [value],
         )
 
-    if key in ("stack_sig", "os_family", "clock_key", "os_guess", "jarm"):
+    if key == "amp":
+        # Amplification factor: ">= N" is the question ("what of mine could be
+        # used as a reflector"), so an exact float match would be useless.
+        try:
+            threshold = float(value)
+        except ValueError as e:
+            raise QueryError(f"amp: number expected, got {value!r}") from e
+        return ("services.amplification >= ?", [threshold])
+
+    if key == "netbios":
+        if "*" in value:
+            return (
+                "COALESCE(services.netbios_name,'') LIKE ?",
+                [value.replace("*", "%")],
+            )
+        return ("services.netbios_name = ?", [value])
+
+    if key in ("stack_sig", "os_family", "clock_key", "os_guess", "jarm",
+               "mac_oui", "ike_vendor"):
         # stack_sig carries ':' separators, so a trailing wildcard ("64:*") is
         # the natural way to group every host sharing an initial TTL.
         if "*" in value:
@@ -333,6 +373,7 @@ SERVICE_COLUMNS = (
     "cert_fingerprint", "cert_sans", "ja3", "ja3s", "ja4", "ja4s",
     "ssh_hostkey", "favicon_mmh3", "tech",
     "stack_sig", "os_family", "hop_count", "clock_key", "os_guess", "jarm",
+    "netbios_name", "mac_oui", "ike_vendor", "amplification",
 )
 _VALID_COLS = set(SERVICE_COLUMNS)
 _SAFE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

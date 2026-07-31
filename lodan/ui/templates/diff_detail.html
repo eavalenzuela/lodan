@@ -74,6 +74,11 @@
                   <small class="muted">{{ e.dimension }}: {{ e.values | join(" / ") }}
                   {%- if not e.conclusive %} (suggestive){% endif %}</small><br>
                 {% endfor %}
+              {% elif kind in ("new_exposure", "gone_exposure") %}
+                {% for item in d["items"] %}
+                  <small class="muted">[{{ item.severity }}] {{ item.category }}:
+                  {{ item.title }}</small><br>
+                {% endfor %}
               {% elif kind == "risk_increased" %}
                 {{ d.reasons | join(", ") }}<br>
                 {% for item in d["items"] %}

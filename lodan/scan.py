@@ -190,6 +190,7 @@ async def run_scan(
                         retries=cfg.scan.retries,
                         tls_matrix=cfg.scan.tls_matrix,
                         jarm=cfg.scan.jarm,
+                        snmp=cfg.scan.snmp,
                     ),
                 )
                 alog.event("probes_completed", services_probed=summary.services_probed)

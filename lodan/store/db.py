@@ -35,6 +35,10 @@ _SERVICES_COLUMN_MIGRATIONS = (
     ("clock_key", "TEXT"),
     ("os_guess", "TEXT"),
     ("jarm", "TEXT"),
+    ("netbios_name", "TEXT"),
+    ("mac_oui", "TEXT"),
+    ("ike_vendor", "TEXT"),
+    ("amplification", "REAL"),
 )
 
 # Same idea for `hosts`, which gained the host-level stack consensus and the

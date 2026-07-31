@@ -25,6 +25,10 @@ class ProbeResult:
     favicon_mmh3: int | None = None
     tech: list[str] | None = None
     jarm: str | None = None
+    netbios_name: str | None = None
+    mac_oui: str | None = None
+    ike_vendor: str | None = None
+    amplification: float | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     #: DER bytes of every cert in the server's chain, leaf first. Kept off
     #: `raw` because that is JSON-serialized at the storage boundary and this
@@ -47,5 +51,8 @@ class ProbeResult:
 class Probe(Protocol):
     name: str
     default_ports: frozenset[int]
+    #: Transport this probe speaks. Defaults to "tcp" when a probe doesn't
+    #: declare one, so the TCP fleet needed no change when UDP was added.
+    proto: str
 
     async def probe(self, ip: str, port: int, timeout: float) -> ProbeResult: ...

@@ -20,11 +20,20 @@ Categories, roughly by what they flag:
 - weak-key          undersized or deprecated public keys, and ROCA-fingerprint
                     matches (written by enrich.keyposture, which also files
                     the ROCA CVE into `vulns`)
+- http-headers      missing security headers (graded), permissive CORS, cookies
+                    without Secure / HttpOnly / SameSite
+- directory-listing an autoindex page is reachable
+- default-page      a stock nginx / Apache / IIS install page is serving
+- debug-page        a debugger, traceback or phpinfo() is reachable
+- admin-open        an admin UI answered with its interface rather than a 401
+- amplification     the service can be used as a DDoS reflector against others
+- eol               software past its end-of-support date (enrich.risk)
 """
 from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -229,9 +238,220 @@ def _ssh_algorithm_findings(row: ServiceRow, now: datetime) -> list[Finding]:
     return out
 
 
+def _headers_of(row: ServiceRow) -> dict[str, str] | None:
+    """Lower-cased response headers, or None if the probe captured none.
+
+    None and {} mean different things: no `headers` key at all is "we didn't
+    get a response to grade", while an empty dict is a server that genuinely
+    sent no headers — which is itself a failing grade, not a reason to skip.
+    """
+    headers = row.raw.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    return {str(k).lower(): v for k, v in headers.items() if isinstance(v, str)}
+
+
+# Security headers, with the grade weight each one carries. Absence is what
+# gets scored; a present-but-weak value is checked separately below.
+_SECURITY_HEADERS = {
+    "strict-transport-security": "HSTS",
+    "content-security-policy": "CSP",
+    "x-frame-options": "X-Frame-Options",
+    "x-content-type-options": "X-Content-Type-Options",
+    "referrer-policy": "Referrer-Policy",
+}
+
+
+def _http_header_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Security-header grade, permissive CORS, and cookie attributes."""
+    if row.service not in ("http", "https"):
+        return []
+    headers = _headers_of(row)
+    if headers is None:
+        return []
+    out: list[Finding] = []
+
+    missing = [label for key, label in _SECURITY_HEADERS.items() if key not in headers]
+    if missing:
+        # Graded rather than one finding per header: five separate rows for one
+        # unhardened site is noise, and the grade is the actionable summary.
+        grade = _header_grade(len(_SECURITY_HEADERS) - len(missing))
+        severity = "medium" if grade in ("D", "F") else "low"
+        out.append(Finding(
+            "http-headers", severity,
+            f"Missing security headers ({', '.join(missing)}) — grade {grade}.",
+            {"missing": missing, "grade": grade},
+        ))
+
+    cors = headers.get("access-control-allow-origin")
+    if cors == "*":
+        credentials = headers.get("access-control-allow-credentials", "").lower()
+        out.append(Finding(
+            "http-headers",
+            # Wildcard origin plus credentials is the combination browsers
+            # refuse — a server sending both is misconfigured, not just lax.
+            "high" if credentials == "true" else "low",
+            "Permissive CORS policy (Access-Control-Allow-Origin: *"
+            + (" with credentials)." if credentials == "true" else ")."),
+            {"cors": cors, "credentials": credentials or None},
+        ))
+
+    for problem in _cookie_problems(row):
+        out.append(Finding("http-headers", "low", problem, {}))
+    return out
+
+
+def _header_grade(present: int) -> str:
+    return {5: "A", 4: "B", 3: "C", 2: "D", 1: "E"}.get(present, "F")
+
+
+def _cookie_problems(row: ServiceRow) -> list[str]:
+    raw_cookies = row.raw.get("set_cookie") or row.raw.get("cookies")
+    cookies: list[str] = []
+    if isinstance(raw_cookies, str):
+        cookies = [raw_cookies]
+    elif isinstance(raw_cookies, list):
+        cookies = [c for c in raw_cookies if isinstance(c, str)]
+    else:
+        header = (_headers_of(row) or {}).get("set-cookie")
+        if header:
+            cookies = [header]
+    out: list[str] = []
+    for cookie in cookies:
+        lowered = cookie.lower()
+        name = cookie.split("=", 1)[0].strip()
+        missing = [
+            flag for flag, token in (
+                ("Secure", "secure"), ("HttpOnly", "httponly"), ("SameSite", "samesite")
+            )
+            if token not in lowered
+        ]
+        if missing:
+            out.append(f"Cookie {name!r} missing {', '.join(missing)}.")
+    return out
+
+
+# Body signatures for pages that should never be reachable in production.
+_DEBUG_PAGES: tuple[tuple[str, str, str], ...] = (
+    ("directory-listing", "high", r"<title>Index of /"),
+    ("default-page", "low", r"Welcome to nginx!|Apache2 (Ubuntu|Debian) Default Page"),
+    ("default-page", "low", r"IIS Windows Server|Test Page for the Apache HTTP Server"),
+    ("debug-page", "high", r"Werkzeug Debugger|Django.*DEBUG = True|Traceback \(most recent"),
+    ("debug-page", "high", r"phpinfo\(\)|<title>phpinfo"),
+    ("debug-page", "medium", r"Whoops, looks like something went wrong|Symfony Exception"),
+)
+
+# Admin interfaces answering with their UI instead of a login/401.
+_ADMIN_PAGES: tuple[tuple[str, str], ...] = (
+    ("Grafana", r"grafana"),
+    ("Jenkins", r"jenkins|Dashboard \[Jenkins\]"),
+    ("phpMyAdmin", r"phpmyadmin"),
+    ("Kibana", r"kibana"),
+    ("Adminer", r"adminer"),
+    ("Portainer", r"portainer"),
+    ("Traefik dashboard", r"traefik"),
+)
+
+
+def _http_page_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Directory listings, default/debug pages, and open admin panels.
+
+    Pure post-hoc analysis of the single GET / body the HTTP probe already
+    fetched — no additional request is made, and no login form is submitted.
+    """
+    if row.service not in ("http", "https"):
+        return []
+    body = row.raw.get("body")
+    title = row.raw.get("title")
+    status = row.raw.get("status")
+    haystack = " ".join(
+        part for part in (
+            body if isinstance(body, str) else "",
+            title if isinstance(title, str) else "",
+        ) if part
+    )
+    if not haystack:
+        return []
+    out: list[Finding] = []
+    for category, severity, pattern in _DEBUG_PAGES:
+        if re.search(pattern, haystack, re.IGNORECASE):
+            out.append(Finding(
+                category, severity,
+                f"Reachable {category.replace('-', ' ')} detected.",
+                {"pattern": pattern},
+            ))
+            break   # one page can only be one kind of page
+
+    # An admin UI is only "open" if it answered with the app rather than an
+    # auth challenge. A 401/403 means the gate is doing its job.
+    if isinstance(status, int) and status in (401, 403):
+        return out
+    for label, pattern in _ADMIN_PAGES:
+        if re.search(pattern, haystack, re.IGNORECASE):
+            out.append(Finding(
+                "admin-open", "medium",
+                f"{label} admin interface answered without authentication.",
+                {"product": label, "status": status},
+            ))
+            break
+    return out
+
+
+def _amplification_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """A host of yours usable as a DDoS reflector against someone else."""
+    amplification = row.raw.get("amplification")
+    if not isinstance(amplification, int | float) or amplification < 5:
+        return []
+    return [Finding(
+        "amplification",
+        "high" if amplification >= 20 else "medium",
+        f"{row.service or 'service'} amplifies {amplification}x — usable as a "
+        f"reflector in a DDoS against third parties.",
+        {"factor": amplification, "service": row.service},
+    )]
+
+
+def _snmp_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Default-community SNMP is itself the misconfiguration."""
+    if row.service != "snmp" or not row.raw.get("community_accepted"):
+        return []
+    return [Finding(
+        "unauth-service", "high",
+        "SNMP answers the default 'public' community — full device inventory "
+        "readable without authentication.",
+        {"community": row.raw.get("community_accepted"),
+         "sys_descr": row.raw.get("sys_descr")},
+    )]
+
+
+def _ike_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    if row.service != "ike":
+        return []
+    weak = row.raw.get("weak_transform")
+    if not weak:
+        return []
+    return [Finding(
+        "weak-crypto", "medium",
+        f"VPN gateway accepted a weak IKE transform ({', '.join(weak)}).",
+        {"transform": row.raw.get("selected_transform")},
+    )]
+
+
+def _ldap_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    if row.service != "ldap" or not row.raw.get("rootdse"):
+        return []
+    return [Finding(
+        "unauth-service", "low",
+        "LDAP rootDSE readable anonymously (directory layout disclosed).",
+        {"naming_contexts": row.raw.get("naming_contexts")},
+    )]
+
+
 _DETECTORS = (
     _cleartext_admin, _no_tls, _unauth_service, _tls_findings,
     _chain_findings, _tls_matrix_findings, _ssh_algorithm_findings,
+    _http_header_findings, _http_page_findings, _amplification_findings,
+    _snmp_findings, _ike_findings, _ldap_findings,
 )
 
 

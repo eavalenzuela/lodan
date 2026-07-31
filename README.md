@@ -8,21 +8,34 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 871+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 959+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
-- 22 protocol probes, all detection-only — no credentials, no auth attempts:
-  TLS (with JA3/JA3S and JA4/JA4S), HTTP (headers, title, favicon mmh3, tech
-  fingerprinting), SSH (banner + host keys), SMB (SMB2 NEGOTIATE), RDP (X.224
-  NEG_REQ), MQTT, Redis, MongoDB, Docker, Kubernetes, SMTP, FTP, DNS
-  (version.bind), Elasticsearch, IMAP, POP3, PostgreSQL (SSLRequest), MySQL /
-  MariaDB (handshake), VNC (RFB security types), Telnet, rsync, and AMQP.
+- 30 protocol probes (23 TCP + 7 UDP), all detection-only — no credentials, no
+  auth attempts: TLS (with JA3/JA3S and JA4/JA4S), HTTP (headers, title,
+  favicon mmh3, tech fingerprinting), SSH (banner, host keys + KEXINIT), SMB
+  (SMB2 NEGOTIATE), RDP (X.224 NEG_REQ), MQTT, Redis, MongoDB, Docker,
+  Kubernetes, SMTP, FTP, DNS (version.bind), Elasticsearch, IMAP, POP3,
+  PostgreSQL (SSLRequest), MySQL / MariaDB (handshake), VNC (RFB security
+  types), Telnet, rsync, AMQP, and LDAP (anonymous rootDSE — no bind request
+  is ever sent).
+- 7 UDP probes on the datagram fleet, unlocking ports discovery always found
+  but nothing could look at: SNMPv2c (sysDescr / sysObjectID — **opt-in**, see
+  below), NTP mode-6, memcached `stats`, SSDP/UPnP M-SEARCH, mDNS DNS-SD,
+  NetBIOS-NS node status (computer name, workgroup, MAC OUI), and IKE/IPsec
+  vendor-ID fingerprinting. NTP and memcached also report an amplification
+  factor, so "this host of yours can reflect a DDoS at someone else" becomes a
+  queryable property.
 - Exposure / misconfiguration findings derived from the probe results:
   cleartext-admin (Telnet), no-TLS (SMTP/IMAP/POP3/FTP/MySQL/PostgreSQL),
-  unauthenticated services (VNC no-auth, open Elasticsearch/Redis/Docker/Mongo),
-  and TLS certificate problems (expired / expiring-soon / self-signed /
-  deprecated protocol version). Browse them with `lodan findings`.
+  unauthenticated services (VNC no-auth, open Elasticsearch/Redis/Docker/Mongo,
+  default-community SNMP, anonymous LDAP rootDSE), TLS certificate problems,
+  HTTP security-header grades, permissive CORS, cookies missing
+  Secure/HttpOnly/SameSite, directory listings, stock default pages, reachable
+  debuggers and `phpinfo()`, open admin panels (Grafana / Jenkins /
+  phpMyAdmin / Kibana answering with their UI rather than a 401), and DDoS
+  amplification. Browse them with `lodan findings`.
 - Offline enrichment: rDNS, ASN/org + country via IP2Location LITE
   (token-based auto-download of both DB-ASN and DB1), CVE matching
   against the NVD 2.0 snapshot.
@@ -77,8 +90,9 @@ end-to-end:
   signature or hop count moved under a service that looks unchanged on the
   wire), `topology_change` (backend count or device class flipped),
   `risk_increased` (a service that did not move became more dangerous — newly
-  on KEV, priority raised, or newly end-of-life); auto-computed after every
-  scan.
+  on KEV, priority raised, or newly end-of-life), `new_exposure` /
+  `gone_exposure` (an exposure category appeared or was remediated);
+  auto-computed after every scan.
 - FTS5-backed mini-DSL: `port:443 AND sans:*.corp.example.com`,
   `tech:nginx OR tech:apache`, `banner:OpenSSH*`, with the full
   grammar documented under [Query DSL](#query-dsl).
@@ -182,6 +196,8 @@ key     := banner | tech | sans | port | service | ip
          | os_guess | device_type | nat_suspected | min_backend_count
          | jarm | chain_cert | chain_issuer
          | kev | priority | epss | eol
+         | netbios | mac_oui | ike_vendor | amp
+         | finding | severity
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -211,6 +227,12 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
 - `kev:true`, `priority:critical`, `epss:0.5` (matches **at least** that
   probability) and `eol:true` join through `vulns` / `findings`. They need
   `lodan update --risk` to have been run.
+- `finding:directory-listing` and `severity:high` join through the `findings`
+  table, so exposures are a first-class query facet and not only reachable
+  through `lodan findings`.
+- `netbios:FILESRV*`, `mac_oui:00:50:56` and `ike_vendor:Fortinet` pivot on
+  the UDP fleet's identity fields. `amp:20` matches an amplification factor of
+  **at least** 20.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
@@ -267,6 +289,25 @@ Every probe is strictly detection-only:
 - A deliberately-empty HTTP `GET /` and `GET /favicon.ico` with a
   `User-Agent: lodan/<version>` header is the maximum active behavior
   against a web endpoint.
+- SSH reads the server's `SSH_MSG_KEXINIT` after the protocol-mandatory
+  identification exchange and stops there: lodan never sends its own KEXINIT,
+  so key exchange never begins.
+- LDAP issues an unauthenticated rootDSE search and never a bind request, so
+  no bind DN or password is transmitted.
+- The TLS acceptance matrix and JARM are each ClientHello → read ServerHello →
+  close, bounded to a fixed count per port. No handshake is completed and no
+  application data is ever sent.
+- The UDP fleet sends one datagram per service and reads one reply. No monlist
+  harvest loop, no source spoofing, no writes (`SET`, name registration).
+
+**The one boundary case: SNMP.** SNMPv2c has no bannerable handshake, so there
+is no way to check whether SNMP is exposed without presenting a community
+string. lodan sends *only* the single RFC-default `public`, once, never a
+second value and never a guessing loop — and treats any response as an
+exposure finding, because default-community SNMP *is* the misconfiguration
+being reported. Because `public` is nonetheless a default access token rather
+than a bannergrab, this probe is **off unless you turn it on**
+(`[scan] snmp = true`).
 
 The web UI binds to `127.0.0.1` by default. Non-loopback binds require
 `--auth-token`, which the UI then checks against the `X-Lodan-Token`

@@ -1,6 +1,6 @@
 """Compute and persist the delta between two scans.
 
-Eight kinds of finding:
+Ten kinds of finding:
 
 - new_service   (ip, port, proto) present in the newer scan, absent in the older.
 - gone_service  present in the older scan, absent in the newer.
@@ -25,6 +25,11 @@ Eight kinds of finding:
                 remediation priority rose, or its software crossed an
                 end-of-support date. Every other kind here is topology; this
                 one is posture.
+- new_exposure / gone_exposure  an exposure-findings category appeared on (or
+                cleared from) a service. Matched on category, not on the
+                finding's title — titles embed dates and counts, so comparing
+                them would report a change every scan for a cert that is
+                simply ageing.
 
 Each finding lands in scan_diffs keyed by (from_scan_id, to_scan_id, kind, ip,
 port). A detail JSON blob carries the kind-specific fields so the UI can
@@ -40,6 +45,7 @@ from typing import Any
 KINDS = (
     "new_service", "gone_service", "changed", "new_cert", "new_host",
     "path_changed", "topology_change", "risk_increased",
+    "new_exposure", "gone_exposure",
 )
 
 
@@ -53,13 +59,15 @@ class DiffCounts:
     path_changed: int = 0
     topology_change: int = 0
     risk_increased: int = 0
+    new_exposure: int = 0
+    gone_exposure: int = 0
 
     @property
     def total(self) -> int:
         return (
             self.new_service + self.gone_service + self.changed + self.new_cert
             + self.new_host + self.path_changed + self.topology_change
-            + self.risk_increased
+            + self.risk_increased + self.new_exposure + self.gone_exposure
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -72,6 +80,8 @@ class DiffCounts:
             "path_changed": self.path_changed,
             "topology_change": self.topology_change,
             "risk_increased": self.risk_increased,
+            "new_exposure": self.new_exposure,
+            "gone_exposure": self.gone_exposure,
             "total": self.total,
         }
 
@@ -106,6 +116,8 @@ def compute_and_store(
         path_changed=_insert_path_changed(conn, from_scan_id, to_scan_id),
         topology_change=_insert_topology_change(conn, from_scan_id, to_scan_id),
         risk_increased=_insert_risk_increased(conn, from_scan_id, to_scan_id),
+        new_exposure=_insert_exposure_delta(conn, from_scan_id, to_scan_id, "new"),
+        gone_exposure=_insert_exposure_delta(conn, from_scan_id, to_scan_id, "gone"),
     )
     return counts
 
@@ -305,6 +317,52 @@ def _insert_topology_change(conn: sqlite3.Connection, f: int, t: int) -> int:
             )
             for ip, bc_from, bc_to, dt_from, dt_to, evidence in rows
         ],
+    )
+
+
+def _insert_exposure_delta(
+    conn: sqlite3.Connection, f: int, t: int, direction: str
+) -> int:
+    """Exposure findings that appeared (or cleared) between two scans.
+
+    Keyed on (ip, port, category) rather than on the finding's title: titles
+    embed dates and counts ("expires in 12 days"), so comparing them would
+    report a change every single scan for a cert that is quietly ageing.
+
+    `gone_exposure` is reported for the same reason `gone_service` is — an
+    operator needs to see remediation land, not just breakage appear.
+    """
+    newer, older = (t, f) if direction == "new" else (f, t)
+    rows = conn.execute(
+        """
+        SELECT b.ip, b.port, b.category, MIN(b.severity), MIN(b.title)
+        FROM findings b
+        WHERE b.scan_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM findings a
+            WHERE a.scan_id = ?
+              AND a.ip = b.ip
+              AND COALESCE(a.port, -1) = COALESCE(b.port, -1)
+              AND a.category = b.category
+          )
+        GROUP BY b.ip, b.port, b.category
+        """,
+        (newer, older),
+    ).fetchall()
+    kind = "new_exposure" if direction == "new" else "gone_exposure"
+
+    # One diff row per (ip, port): scan_diffs is keyed on it, so a host that
+    # gained several exposure categories at once collapses into one finding
+    # listing them all.
+    merged: dict[tuple[str, int | None], dict[str, Any]] = {}
+    for ip, port, category, severity, title in rows:
+        entry = merged.setdefault((ip, port), {"categories": [], "items": []})
+        entry["categories"].append(category)
+        entry["items"].append(
+            {"category": category, "severity": severity, "title": title}
+        )
+    return _insert_diff_rows(
+        conn, f, t, kind, [(ip, port, detail) for (ip, port), detail in merged.items()]
     )
 
 

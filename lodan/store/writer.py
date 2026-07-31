@@ -225,6 +225,10 @@ def update_service_from_probe(
             favicon_mmh3 = COALESCE(?, favicon_mmh3),
             tech = COALESCE(?, tech),
             jarm = COALESCE(?, jarm),
+            netbios_name = COALESCE(?, netbios_name),
+            mac_oui = COALESCE(?, mac_oui),
+            ike_vendor = COALESCE(?, ike_vendor),
+            amplification = COALESCE(?, amplification),
             raw = COALESCE(?, raw)
         WHERE scan_id = ? AND ip = ? AND port = ? AND proto = ?
         """,
@@ -241,6 +245,10 @@ def update_service_from_probe(
             result.favicon_mmh3,
             normalize.tech_json(result.tech),
             result.jarm,
+            result.netbios_name,
+            result.mac_oui,
+            result.ike_vendor,
+            result.amplification,
             result.raw_json() if result.raw else None,
             handle.scan_id,
             ip,
