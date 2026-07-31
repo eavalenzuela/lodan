@@ -60,13 +60,20 @@ def cloud_overlaps(net: Network) -> list[CloudHit]:
 
 
 def check_workspace(ws: WorkspaceBlock) -> None:
-    """Validate the workspace config's authorized_ranges. Raises on violation.
+    """Validate the workspace's declared scope. Raises on violation.
 
     Applied at scan start; re-run here rather than trusting the config
     pydantic validator so we catch newly-added cloud prefix data too.
+
+    A workspace needs *some* declared scope, but authorized_domains counts:
+    a domains-only workspace resolves its scope at scan time. What is still
+    refused is a workspace that declares nothing at all.
     """
-    if not ws.authorized_ranges:
-        raise AuthorizationError("workspace has no authorized_ranges; refusing to scan")
+    if not ws.authorized_ranges and not ws.authorized_domains:
+        raise AuthorizationError(
+            "workspace has no authorized_ranges or authorized_domains; "
+            "refusing to scan"
+        )
 
     for cidr in ws.authorized_ranges:
         net = ip_network(cidr, strict=False)

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from ipaddress import ip_network
 from pathlib import Path
 
-from lodan import authz
+from lodan import authz, domains
 from lodan.config import (
     Config,
     DiffBlock,
@@ -128,6 +128,49 @@ def remove_cidr(workspace: str, raw: str) -> bool:
     if cidr not in ranges:
         return False
     cfg.workspace.authorized_ranges = [c for c in ranges if c != cidr]
+    _save(workspace, cfg)
+    return True
+
+
+def add_domains(workspace: str, raws: list[str]) -> AddResult:
+    """Add domains to `authorized_domains`. Idempotent per domain.
+
+    Note what this does NOT do: it never resolves anything or touches
+    `authorized_ranges`. Domain scope is computed fresh at scan time and lives
+    only for that run.
+    """
+    cfg = load(workspace)
+    existing = list(cfg.workspace.authorized_domains)
+    result = AddResult()
+    seen = set(existing)
+    for raw in raws:
+        try:
+            domain = domains.normalize_domain(raw)
+        except domains.DomainError as e:
+            raise ManageError(str(e)) from None
+        if domain in seen:
+            result.skipped.append(domain)
+            continue
+        seen.add(domain)
+        existing.append(domain)
+        result.added.append(domain)
+    if result.added:
+        cfg.workspace.authorized_domains = existing
+        _save(workspace, cfg)
+    return result
+
+
+def remove_domain(workspace: str, raw: str) -> bool:
+    """Remove a domain from `authorized_domains`. Returns whether it was there."""
+    cfg = load(workspace)
+    try:
+        domain = domains.normalize_domain(raw)
+    except domains.DomainError as e:
+        raise ManageError(str(e)) from None
+    current = cfg.workspace.authorized_domains
+    if domain not in current:
+        return False
+    cfg.workspace.authorized_domains = [d for d in current if d != domain]
     _save(workspace, cfg)
     return True
 

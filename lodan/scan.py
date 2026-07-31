@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import sqlite3
 
-from lodan import audit, authz, findings, normalize, notify
+from lodan import audit, authz, domains, findings, normalize, notify
 from lodan.config import Config, NotifyBlock
 from lodan.diff import resolver as diff_resolver
 from lodan.diff.scanner import DiffCounts, compute_and_store
@@ -54,6 +54,7 @@ class ScanSummary:
         self.nat_suspected = 0
         self.weak_keys = 0
         self.eol_findings = 0
+        self.domains_resolved = 0
         self.vulns_matched = 0
         self.findings = 0
         self.diff_total = 0
@@ -74,6 +75,13 @@ async def run_scan(
     authz.check_workspace(cfg.workspace)
 
     nets: list[authz.Network] = authz.authorized_networks(cfg.workspace)
+    # Authorized domains grant scope for THIS RUN ONLY. The resolved addresses
+    # join `nets` in memory and are never written back to authorized_ranges,
+    # so nothing a DNS record said today still authorizes anything tomorrow.
+    domain_scopes = await domains.resolve_scope(cfg.workspace.authorized_domains)
+    domain_nets = domains.scope_networks(domain_scopes)
+    nets = nets + domain_nets
+
     ports = parse_ports(cfg.scan.ports)
     spec = DiscoverySpec(
         targets=nets,
@@ -123,6 +131,10 @@ async def run_scan(
                 probes=probes,
             )
             _ledger_authorized_scope(conn, handle, operator, cfg)
+            summary.domains_resolved = domains.record_resolutions(
+                conn, handle.scan_id, domain_scopes
+            )
+            _ledger_domain_scope(conn, handle, operator, workspace, domain_scopes, alog)
             # Discovery can stream tens of thousands of rows on a wide range.
             # In autocommit mode that is one fsync per row; batch the inserts
             # (and the interleaved authz-reject bookkeeping) into transactions
@@ -305,6 +317,45 @@ async def _notify_changes(
         if not r.ok:
             writer.record_error(
                 conn, handle, stage=f"notify:{r.sink}", error=r.detail,
+            )
+
+
+def _ledger_domain_scope(
+    conn, handle, operator: str, workspace: str, scopes, alog
+) -> None:
+    """Record what DNS authorized (and what it was refused for) at scan start.
+
+    Domain scope is ephemeral, which makes the ledger entry the *only* durable
+    record of which addresses a name pointed at when the scan ran. A refused
+    CNAME is recorded just as deliberately as an authorized address: "we
+    declined to follow this name onto somebody else's infrastructure" is
+    exactly the kind of thing the accountability trail exists for.
+    """
+    for scope in scopes:
+        for address in scope.addresses:
+            writer.record_authz_decision(
+                conn,
+                scan_id=handle.scan_id, workspace=workspace, operator=operator,
+                decision="authorized", scope_kind="domain", target=address,
+                reason=f"resolved from {scope.domain} (run-scoped)",
+            )
+        for target, why in scope.refused:
+            writer.record_authz_decision(
+                conn,
+                scan_id=handle.scan_id, workspace=workspace, operator=operator,
+                decision="refused", scope_kind="domain", target=target,
+                reason=f"{scope.domain}: {why}",
+            )
+            alog.event(
+                "domain_scope_refused",
+                domain=scope.domain, target=target, reason=why,
+            )
+        if scope.error:
+            alog.event("domain_resolution_failed", domain=scope.domain, error=scope.error)
+        elif scope.addresses:
+            alog.event(
+                "domain_scope_authorized",
+                domain=scope.domain, addresses=scope.addresses,
             )
 
 

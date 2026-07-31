@@ -105,6 +105,71 @@ def test_scan_derives_and_rolls_up_stack_fingerprints(workspace: str) -> None:
     conn.close()
 
 
+def test_domain_scope_authorizes_for_this_run_only(
+    workspace: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolved address is scannable now and never joins authorized_ranges."""
+    from lodan import dnsq, manage
+
+    manage.add_domains(workspace, ["corp.example.com"])
+
+    async def _fake(domain: str, *, timeout: float = 3.0):
+        return dnsq.Resolution(domain=domain, a=["198.51.100.7"])
+
+    monkeypatch.setattr("lodan.domains.dnsq.resolve", _fake)
+    # 198.51.100.7 is outside the workspace's 10.0.0.0/24 — only the domain
+    # resolution can authorize it.
+    _register_fake([DiscoveryResult("198.51.100.7", 443, "tcp")])
+    summary = run_scan_sync(workspace)
+    assert summary.services_discovered == 1
+    assert summary.authz_rejections == 0
+    assert summary.domains_resolved == 1
+
+    # The permanent allowlist is untouched.
+    assert manage.load(workspace).workspace.authorized_ranges == ["10.0.0.0/24"]
+
+    conn = sqlite3.connect(workspace_db(workspace))
+    ledger = conn.execute(
+        "SELECT decision, scope_kind, target, reason FROM authz_ledger "
+        "WHERE scope_kind = 'domain'"
+    ).fetchall()
+    assert ledger == [
+        ("authorized", "domain", "198.51.100.7",
+         "resolved from corp.example.com (run-scoped)")
+    ]
+    conn.close()
+
+
+def test_domain_cname_to_a_third_party_is_refused_end_to_end(
+    workspace: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lodan import dnsq, manage
+
+    manage.add_domains(workspace, ["corp.example.com"])
+
+    async def _fake(domain: str, *, timeout: float = 3.0):
+        return dnsq.Resolution(
+            domain=domain, a=["198.51.100.7"],
+            cnames=[(domain, "edge.cloudfront.net")],
+        )
+
+    monkeypatch.setattr("lodan.domains.dnsq.resolve", _fake)
+    _register_fake([DiscoveryResult("198.51.100.7", 443, "tcp")])
+    summary = run_scan_sync(workspace)
+
+    # The address was never authorized, so discovery's hit is rejected.
+    assert summary.services_discovered == 0
+    assert summary.authz_rejections == 1
+
+    conn = sqlite3.connect(workspace_db(workspace))
+    (refusal,) = conn.execute(
+        "SELECT reason FROM authz_ledger WHERE scope_kind = 'domain' "
+        "AND decision = 'refused'"
+    ).fetchone()
+    assert "CNAME points outside" in refusal
+    conn.close()
+
+
 def test_scan_rejects_off_range_targets(workspace: str) -> None:
     _register_fake([
         DiscoveryResult("10.0.0.5", 22, "tcp"),

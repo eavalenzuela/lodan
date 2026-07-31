@@ -58,6 +58,49 @@
   </div>
 
   <div class="card">
+    <h2>Authorized domains</h2>
+    <p class="muted">
+      Resolved to A / AAAA records at the start of every scan. Those addresses
+      are authorized <strong>for that run only</strong> and are never added to
+      the ranges above. A domain that is a CNAME onto a domain you have not
+      authorized is refused, because its addresses belong to someone else.
+      Subdomains found in certificates are listed on the
+      <a href="/domains">domains page</a> but are never scanned.
+    </p>
+    {% if cfg.workspace.authorized_domains %}
+      <table class="scope">
+        <tbody>
+          {% for domain in cfg.workspace.authorized_domains %}
+            <tr>
+              <td><code>{{ domain }}</code></td>
+              <td class="right">
+                {% if not read_only %}
+                <form action="/manage/domains/remove" method="post" class="inline">
+                  <input type="hidden" name="domain" value="{{ domain }}">
+                  <button type="submit" class="danger">remove</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No domains authorized.</p>
+    {% endif %}
+    {% if not read_only %}
+    <form action="/manage/domains/add" method="post" class="stack">
+      <label>Add domains
+        <input type="text" name="domains"
+               placeholder="corp.example.com, git.corp.example.com  (space/comma separated)"
+               size="52" required>
+      </label>
+      <button type="submit">authorize domains</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>Cloud-provider policy</h2>
     <p class="muted">
       Ranges overlapping known cloud prefixes are blocked unless this is on and

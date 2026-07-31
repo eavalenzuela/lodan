@@ -253,6 +253,20 @@ CREATE TABLE IF NOT EXISTS scan_diffs (
   PRIMARY KEY (from_scan_id, to_scan_id, kind, ip, port)
 );
 
+-- What each authorized domain resolved to for this scan. Kept per-scan
+-- because domain scope is deliberately ephemeral: it authorized targets for
+-- the run that resolved it and nothing more, so the record of what DNS said
+-- at that moment is part of the audit trail.
+CREATE TABLE IF NOT EXISTS domain_resolutions (
+  scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+  domain TEXT NOT NULL,
+  addresses BLOB,                 -- JSON array of A/AAAA results
+  cnames BLOB,                    -- JSON array of {from, to}
+  refused BLOB,                   -- JSON array of {target, reason}
+  error TEXT,
+  PRIMARY KEY (scan_id, domain)
+);
+
 CREATE TABLE IF NOT EXISTS favicons (
   mmh3 INTEGER PRIMARY KEY,
   label TEXT,                     -- operator-assigned label (e.g. "Jenkins login")

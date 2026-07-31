@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field, field_validator
 class WorkspaceBlock(BaseModel):
     name: str
     authorized_ranges: list[str] = Field(default_factory=list)
+    # Domains grant scope for the duration of a scan only: they are resolved
+    # at scan start and the resulting addresses are never written back here.
+    # See lodan/domains.py for the CNAME-containment rule.
+    authorized_domains: list[str] = Field(default_factory=list)
     cloud_provider_allowed: bool = False
     cloud_provider_justification: str = ""
 
@@ -26,6 +30,13 @@ class WorkspaceBlock(BaseModel):
         for c in v:
             ip_network(c, strict=False)
         return v
+
+    @field_validator("authorized_domains")
+    @classmethod
+    def _validate_domains(cls, v: list[str]) -> list[str]:
+        from lodan.domains import normalize_domain
+
+        return [normalize_domain(d) for d in v]
 
 
 class ScanBlock(BaseModel):
@@ -184,11 +195,18 @@ def dump_config_toml(cfg: Config) -> str:
     scan = cfg.scan
     enrich = cfg.enrich
     ranges_fmt = ", ".join(_toml_str(c) for c in ws.authorized_ranges)
+    domains_fmt = ", ".join(_toml_str(d) for d in ws.authorized_domains)
 
+    # Every field of every block belongs here: this function rewrites the whole
+    # config.toml on any management edit, so anything omitted would silently
+    # revert to its default the first time an operator changed an unrelated
+    # setting through the UI.
     lines = [
         "[workspace]",
         f"name = {_toml_str(ws.name)}",
         f"authorized_ranges = [{ranges_fmt}]",
+        f"authorized_domains = [{domains_fmt}]"
+        "   # resolved per-scan; never widens authorized_ranges",
         f"cloud_provider_allowed = {_toml_bool(ws.cloud_provider_allowed)}",
         f"cloud_provider_justification = {_toml_str(ws.cloud_provider_justification)}",
         "",
@@ -203,6 +221,12 @@ def dump_config_toml(cfg: Config) -> str:
         f"per_host_concurrency = {_toml_num(scan.per_host_concurrency)}",
         f"probe_timeout_s = {_toml_num(scan.probe_timeout_s)}",
         f"retries = {_toml_num(scan.retries)}",
+        f"tls_matrix = {_toml_bool(scan.tls_matrix)}"
+        "        # protocol/cipher acceptance probes (+6 hellos per TLS port)",
+        f"jarm = {_toml_bool(scan.jarm)}"
+        "               # JARM fingerprint (+10 hellos per TLS port)",
+        f"snmp = {_toml_bool(scan.snmp)}"
+        "               # sends the default 'public' community; opt-in",
         "",
         "[enrich]",
         f"rdns = {_toml_bool(enrich.rdns)}",
@@ -211,6 +235,9 @@ def dump_config_toml(cfg: Config) -> str:
         f"cve = {_toml_bool(enrich.cve)}",
         f"favicon = {_toml_bool(enrich.favicon)}",
         f"tech = {_toml_bool(enrich.tech)}",
+        f"device = {_toml_bool(enrich.device)}",
+        f"key_posture = {_toml_bool(enrich.key_posture)}",
+        f"risk = {_toml_bool(enrich.risk)}",
         f"keep_raw = {_toml_bool(enrich.keep_raw)}",
         "",
         "[diff]",

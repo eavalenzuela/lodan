@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from lodan import domains as lodan_domains
 from lodan import manage
 from lodan.paths import workspace_config, workspace_db
 from lodan.store.db import connect
@@ -417,6 +418,57 @@ def create_app(
             level = "warn"
         return _redirect_manage("; ".join(parts) or "no change", level)
 
+    @app.post("/manage/domains/add")
+    def domains_add(request: Request, domains_input: str = Form(..., alias="domains")):  # noqa: B008
+        _guard_writable(request)
+        raws = [d for d in re.split(r"[\s,]+", domains_input) if d]
+        if not raws:
+            return _redirect_manage("no domains provided", "err")
+        try:
+            res = manage.add_domains(workspace, raws)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        parts = []
+        if res.added:
+            parts.append("added " + ", ".join(res.added))
+        if res.skipped:
+            parts.append("already authorized: " + ", ".join(res.skipped))
+        return _redirect_manage("; ".join(parts) or "no change")
+
+    @app.post("/manage/domains/remove")
+    def domains_remove(request: Request, domain: str = Form(...)):  # noqa: B008
+        _guard_writable(request)
+        try:
+            removed = manage.remove_domain(workspace, domain)
+        except manage.ManageError as e:
+            return _redirect_manage(str(e), "err")
+        return _redirect_manage(
+            f"removed {domain}" if removed else f"{domain} was not authorized",
+            "ok" if removed else "warn",
+        )
+
+    @app.get("/domains", response_class=HTMLResponse)
+    def domains_page(
+        request: Request,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+        scan: int | None = None,
+    ) -> HTMLResponse:
+        """What each authorized domain resolved to, plus observed subdomains."""
+        cfg = manage.load(workspace)
+        scan_id = scan if scan is not None else _latest_scan_id(db)
+        return templates.TemplateResponse(
+            request, "domains.html",
+            {
+                "workspace": workspace,
+                "scan_id": scan_id,
+                "authorized_domains": cfg.workspace.authorized_domains,
+                "resolutions": _domain_resolutions(db, scan_id),
+                "subdomains": lodan_domains.enumerate_subdomains(
+                    db, cfg.workspace.authorized_domains
+                ),
+            },
+        )
+
     @app.post("/manage/scope/remove")
     def scope_remove(request: Request, cidr: str = Form(...)):  # noqa: B008
         _guard_writable(request)
@@ -608,6 +660,26 @@ def _latest_scan_id(db: sqlite3.Connection) -> int | None:
         "SELECT id FROM scans WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return row[0] if row else None
+
+
+def _domain_resolutions(db: sqlite3.Connection, scan_id: int | None) -> list[dict]:
+    if scan_id is None:
+        return []
+    rows = db.execute(
+        "SELECT domain, addresses, cnames, refused, error FROM domain_resolutions "
+        "WHERE scan_id = ? ORDER BY domain",
+        (scan_id,),
+    ).fetchall()
+    return [
+        {
+            "domain": domain,
+            "addresses": _load_json_list(addresses),
+            "cnames": _load_json_list(cnames),
+            "refused": _load_json_list(refused),
+            "error": error,
+        }
+        for domain, addresses, cnames, refused, error in rows
+    ]
 
 
 def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dict]:

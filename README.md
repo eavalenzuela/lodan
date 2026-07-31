@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 959+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 1027+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -100,9 +100,18 @@ end-to-end:
   hosts / services tables with filtering, pivot views
   (cert / favicon / JA3S / JA4S / SSH host-key / SAN / stack signature /
   boot-time cluster), operator-labelled favicons, diff timeline + detail,
-  DSL query box.
-- In-browser management (`/manage`): add/remove authorized ranges, edit
-  scan + enrichment + retention settings, set the cloud-provider policy,
+  a domains page (per-scan DNS resolution, refused CNAMEs, observed
+  subdomains), DSL query box.
+- Authorized **domains** alongside CIDRs, resolved at the start of every scan.
+  Their A / AAAA addresses grant scope **for that run only** and are never
+  written into `authorized_ranges`, so a record that pointed somewhere last
+  week does not still authorize it today. A domain that is a CNAME onto a
+  domain you have not authorized is refused — those addresses belong to a
+  third party. Subdomains seen in collected certificates are listed on
+  `/domains` but are never scanned: discovering a name is not permission to
+  touch it. Every resolution and refusal lands in the authorization ledger.
+- In-browser management (`/manage`): add/remove authorized ranges and domains,
+  edit scan + enrichment + retention settings, set the cloud-provider policy,
   label favicons, and launch a scan with live status — all sharing the same
   authz guards as the CLI. Gate it off with `serve --read-only` to hand a
   viewer a browse-only instance.
@@ -271,6 +280,15 @@ lodan is reconnaissance, not attack tooling, and it is only for ranges
 you operate. Every workspace's `config.toml` declares an
 `authorized_ranges` allowlist; the scanner refuses targets outside it,
 both at config load and per-batch during the scan loop.
+
+`authorized_domains` is the same contract by another name. Domains are
+resolved at the start of each scan and their A/AAAA addresses authorize
+targets **for that run only** — nothing is written back into
+`authorized_ranges`, so scope never accumulates from DNS. A CNAME onto a
+domain you have not authorized is refused rather than followed, because the
+addresses behind it are somebody else's. Both the authorized addresses and
+the refusals are written to the authorization ledger, which is the only
+durable record of what a name pointed at when the scan ran.
 
 Well-known public cloud prefixes (AWS, GCP, Azure, OCI, DigitalOcean)
 are blocked unless the workspace flips `cloud_provider_allowed = true`

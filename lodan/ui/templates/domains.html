@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% set page_title = "domains" %}
+{% block content %}
+<h1>Domains{% if scan_id %} — scan #{{ scan_id }}{% endif %}</h1>
+
+<div class="card">
+  <p class="muted">
+    Authorized domains are resolved at the start of every scan. The resulting
+    A / AAAA addresses are authorized <strong>for that run only</strong> —
+    they are never written into <code>authorized_ranges</code>, so nothing DNS
+    said in a previous scan still authorizes anything now. Manage the list on
+    the <a href="/manage">manage page</a>.
+  </p>
+</div>
+
+<h2>Resolution</h2>
+{% if resolutions %}
+<table>
+  <thead><tr><th>domain</th><th>addresses (scanned)</th><th>CNAME chain</th><th>refused</th></tr></thead>
+  <tbody>
+    {% for r in resolutions %}
+      <tr>
+        <td><code>{{ r.domain }}</code></td>
+        <td>
+          {% if r.addresses %}
+            {% for address in r.addresses %}
+              <a href="/host/{{ address }}?scan={{ scan_id }}"><code>{{ address }}</code></a>{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          {% elif r.error %}
+            <span class="muted">—</span>
+          {% else %}
+            <span class="muted">none</span>
+          {% endif %}
+        </td>
+        <td class="muted">
+          {% for c in r.cnames %}
+            {{ c.from }} → {{ c.to }}<br>
+          {% else %}
+            <span class="muted">—</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% for entry in r.refused %}
+            <span class="warn"><code>{{ entry.target }}</code> — {{ entry.reason }}</span><br>
+          {% endfor %}
+          {% if r.error %}<span class="warn">{{ r.error }}</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% elif authorized_domains %}
+  <p class="muted">No resolution recorded for this scan yet — run a scan.</p>
+{% else %}
+  <p class="muted">No domains authorized. Add some on the <a href="/manage">manage page</a>.</p>
+{% endif %}
+
+<h2>Observed subdomains</h2>
+<p class="muted">
+  Names seen in certificates collected during scanning that fall under an
+  authorized domain. These are <strong>not scanned</strong> — discovering a
+  name is not permission to touch it. Authorize one explicitly if you want it
+  in scope.
+</p>
+{% if subdomains %}
+<table>
+  <thead><tr><th>subdomain</th><th>seen on</th><th></th></tr></thead>
+  <tbody>
+    {% for s in subdomains %}
+      <tr>
+        <td><code>{{ s.subdomain }}</code>{% if s.wildcard %} <small class="muted">(from a wildcard SAN)</small>{% endif %}</td>
+        <td class="muted">{{ s.seen_on | join(", ") }}</td>
+        <td class="muted">not scanned</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p class="muted">None observed yet.</p>
+{% endif %}
+{% endblock %}
