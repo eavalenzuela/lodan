@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 625+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 648+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -39,10 +39,16 @@ end-to-end:
   passive stack fingerprint, banners and operator favicon labels into a
   `device_type` — server, router/firewall, printer, NAS, IP camera/IoT,
   hypervisor, container host. Unmatched stays NULL rather than guessing.
+- NAT / load-balancer detection: when one address's per-port fingerprints
+  disagree in ways a single host cannot produce (two OS stacks, two SSH host
+  keys), it's flagged with a `min_backend_count` floor. Differing JA3S or
+  certificates are recorded as evidence but never set the flag — one host
+  legitimately serves several TLS stacks.
 - Scan-to-scan diff: `new_service`, `gone_service`, `changed`,
   `new_cert` (workspace-scoped), `new_host`, `path_changed` (stack
   signature or hop count moved under a service that looks unchanged on the
-  wire); auto-computed after every scan.
+  wire), `topology_change` (backend count or device class flipped);
+  auto-computed after every scan.
 - FTS5-backed mini-DSL: `port:443 AND sans:*.corp.example.com`,
   `tech:nginx OR tech:apache`, `banner:OpenSSH*`, with the full
   grammar documented under [Query DSL](#query-dsl).
@@ -142,7 +148,7 @@ term    := NOT? key ':' value
 key     := banner | tech | sans | port | service | ip
          | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
          | stack_sig | os_family | hop_count | clock_key
-         | os_guess | device_type
+         | os_guess | device_type | nat_suspected | min_backend_count
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -160,6 +166,10 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
 - `os_guess:Ubuntu*` matches the distro mined from a service's version
   string; `device_type:printer` joins through the `hosts` table on
   `(scan_id, ip)` the way `cve` joins through `vulns`.
+- `nat_suspected:true|false` and `min_backend_count:2` also join through
+  `hosts`. `min_backend_count` matches **at least** N, since the stored value
+  is a floor — identical machines behind a VIP are indistinguishable and
+  honestly report 1.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
@@ -175,6 +185,8 @@ os_family:windows AND port:3389
 stack_sig:64:* AND NOT os_family:linux
 device_type:printer OR device_type:ip-camera-iot
 os_guess:"Ubuntu 20.04" AND port:22
+nat_suspected:true AND port:443
+min_backend_count:2
 ```
 
 ## Workspace layout on disk

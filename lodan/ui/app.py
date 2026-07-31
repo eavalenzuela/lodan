@@ -674,7 +674,8 @@ def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[
 def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
     row = db.execute(
         "SELECT ip, rdns, asn, asn_org, country, stack_sig, os_family, os_confidence, "
-        "hop_count, os_guess, device_type, device_confidence "
+        "hop_count, os_guess, device_type, device_confidence, "
+        "nat_suspected, min_backend_count, backend_evidence "
         "FROM hosts WHERE scan_id = ? AND ip = ?",
         (scan_id, ip),
     ).fetchone()
@@ -685,6 +686,8 @@ def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
             "stack_sig": row[5], "os_family": row[6], "os_confidence": row[7],
             "hop_count": row[8], "os_guess": row[9], "device_type": row[10],
             "device_confidence": row[11],
+            "nat_suspected": bool(row[12]), "min_backend_count": row[13],
+            "backend_evidence": _load_json_list(row[14]),
         }
     # Host might not have a row if enrichment was off; synthesize a minimal one
     # as long as the IP shows up in services.
@@ -696,9 +699,20 @@ def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
             "ip": ip, "rdns": None, "asn": None, "asn_org": None, "country": None,
             "stack_sig": None, "os_family": None, "os_confidence": None,
             "hop_count": None, "os_guess": None, "device_type": None,
-            "device_confidence": None,
+            "device_confidence": None, "nat_suspected": False,
+            "min_backend_count": None, "backend_evidence": [],
         }
     return None
+
+
+def _load_json_list(raw) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _services_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[dict]:
@@ -745,7 +759,7 @@ def _diff_pairs(db: sqlite3.Connection) -> list[dict]:
                 "from_scan_id": f, "to_scan_id": t,
                 "counts": {"new_service": 0, "gone_service": 0, "changed": 0,
                            "new_cert": 0, "new_host": 0, "path_changed": 0,
-                           "total": 0},
+                           "topology_change": 0, "total": 0},
             },
         )
         entry["counts"][kind] = count

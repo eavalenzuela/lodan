@@ -99,6 +99,27 @@ def stack_sig(obs: StackObservation | None) -> str | None:
     )
 
 
+def stack_class(sig: str | None) -> str | None:
+    """The per-machine-invariant subset of a stack signature.
+
+    `stack_sig` is not safe to compare across ports of one host: the
+    advertised TCP window (and often the window scale) is a per-socket
+    property that varies with the listening application's SO_RCVBUF, so one
+    machine legitimately shows different signatures on :22 and :443.
+
+    Initial TTL, MSS and TCP option order do not vary that way — they come
+    from the kernel's stack, and MSS is fixed by the path. This returns
+    ``ittl:mss:options``, which is what a correlation pass may compare.
+    """
+    if not sig:
+        return None
+    parts = sig.split(":")
+    if len(parts) != 6:
+        return None
+    ittl, _window, mss, _wscale, options, _flags = parts
+    return f"{ittl}:{mss}:{options}"
+
+
 @dataclass(frozen=True)
 class StackSig:
     """One OS-family rule. Every non-None field must match to fire.

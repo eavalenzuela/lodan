@@ -46,6 +46,9 @@ _HOSTS_COLUMN_MIGRATIONS = (
     ("os_guess", "TEXT"),
     ("device_type", "TEXT"),
     ("device_confidence", "REAL"),
+    ("nat_suspected", "INTEGER"),
+    ("min_backend_count", "INTEGER"),
+    ("backend_evidence", "BLOB"),
 )
 
 

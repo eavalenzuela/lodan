@@ -61,6 +61,19 @@
                 {% if d.hop_count.from != d.hop_count.to %}
                   hops: <del>{{ d.hop_count.from }}</del> → <ins>{{ d.hop_count.to }}</ins>
                 {% endif %}
+              {% elif kind == "topology_change" %}
+                {% if d.min_backend_count.from != d.min_backend_count.to %}
+                  backends: <del>{{ d.min_backend_count.from }}</del> →
+                  <ins>{{ d.min_backend_count.to }}</ins><br>
+                {% endif %}
+                {% if d.device_type.from != d.device_type.to %}
+                  device: <del>{{ d.device_type.from or "∅" }}</del> →
+                  <ins>{{ d.device_type.to or "∅" }}</ins><br>
+                {% endif %}
+                {% for e in d.evidence %}
+                  <small class="muted">{{ e.dimension }}: {{ e.values | join(" / ") }}
+                  {%- if not e.conclusive %} (suggestive){% endif %}</small><br>
+                {% endfor %}
               {% endif %}
             </td>
           </tr>

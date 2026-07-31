@@ -7,7 +7,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
     key     := banner | tech | sans | port | service | ip
              | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
              | stack_sig | os_family | hop_count | clock_key
-             | os_guess | device_type
+             | os_guess | device_type | nat_suspected | min_backend_count
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -36,7 +36,7 @@ _VALID_KEYS = {
     "favicon_mmh3", "ja3", "ja3s", "ja4", "ja4s", "hostkey",
     "cve",
     "stack_sig", "os_family", "hop_count", "clock_key",
-    "os_guess", "device_type",
+    "os_guess", "device_type", "nat_suspected", "min_backend_count",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -172,6 +172,31 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
 
     if key == "hostkey":
         return ("services.ssh_hostkey = ?", [value])
+
+    if key == "nat_suspected":
+        if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
+            raise QueryError(f"nat_suspected: expected true/false, got {value!r}")
+        flag = 1 if value.lower() in ("true", "1", "yes") else 0
+        return (
+            "(services.scan_id, services.ip) IN "
+            "(SELECT scan_id, ip FROM hosts WHERE COALESCE(nat_suspected, 0) = ?)",
+            [flag],
+        )
+
+    if key == "min_backend_count":
+        if "*" in value:
+            raise QueryError(f"{key} does not accept wildcards")
+        try:
+            n = int(value)
+        except ValueError as e:
+            raise QueryError(f"{key}: integer expected, got {value!r}") from e
+        # >= rather than =: "at least N backends" is the question an operator
+        # actually asks, and the stored value is itself a floor.
+        return (
+            "(services.scan_id, services.ip) IN "
+            "(SELECT scan_id, ip FROM hosts WHERE min_backend_count >= ?)",
+            [n],
+        )
 
     if key == "device_type":
         # device_type is a host-level verdict, so this joins out to `hosts`

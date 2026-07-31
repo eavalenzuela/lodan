@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS hosts (
   device_type TEXT,               -- server | router-firewall | printer | nas
                                   -- | ip-camera-iot | hypervisor | container-host
   device_confidence REAL,
+  -- Backend correlation: does this one address front more than one machine?
+  -- min_backend_count is a floor, never an estimate — identical boxes behind
+  -- a VIP are indistinguishable and honestly report 1.
+  nat_suspected INTEGER,
+  min_backend_count INTEGER,
+  backend_evidence BLOB,          -- JSON array of per-dimension disagreements
   PRIMARY KEY (scan_id, ip)
 );
 

@@ -20,8 +20,20 @@
     {% if host.stack_sig %}
       <li><span class="label">stack</span><span class="value"><a href="/pivot/stack/{{ host.stack_sig }}">{{ host.stack_sig }}</a></span></li>
     {% endif %}
+    {% if host.min_backend_count and host.min_backend_count > 1 %}
+      <li><span class="label">backends</span><span class="value">≥ {{ host.min_backend_count }}{% if host.nat_suspected %} <small class="muted">(NAT / LB suspected)</small>{% endif %}</span></li>
+    {% endif %}
     <li><span class="label">scan</span><span class="value">#{{ scan_id }}</span></li>
   </ul>
+  {% if host.backend_evidence %}
+    <p class="muted">Fingerprints disagreeing across ports:</p>
+    <ul class="muted">
+      {% for e in host.backend_evidence %}
+        <li>{{ e.dimension }}: {{ e.values | join(" / ") }}
+          {%- if not e.conclusive %} <em>(suggestive only — one host can produce this)</em>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
 </div>
 <h2>Services</h2>
 <table>

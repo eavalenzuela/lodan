@@ -28,6 +28,7 @@ _LABELS = (
     ("new_cert", "new cert(s)"),
     ("new_host", "new host(s)"),
     ("path_changed", "path/stack changed"),
+    ("topology_change", "topology changed"),
 )
 
 

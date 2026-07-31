@@ -276,8 +276,8 @@ def diff_cmd(
         f"[green]diff {from_id} -> {to_id}[/]: "
         f"{counts.new_service} new, {counts.gone_service} gone, "
         f"{counts.changed} changed, {counts.new_cert} new certs, "
-        f"{counts.new_host} new hosts, {counts.path_changed} path changed "
-        f"({counts.total} total)"
+        f"{counts.new_host} new hosts, {counts.path_changed} path changed, "
+        f"{counts.topology_change} topology changed ({counts.total} total)"
     )
 
 

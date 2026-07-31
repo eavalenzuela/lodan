@@ -1,6 +1,6 @@
 """Compute and persist the delta between two scans.
 
-Six kinds of finding:
+Seven kinds of finding:
 
 - new_service   (ip, port, proto) present in the newer scan, absent in the older.
 - gone_service  present in the older scan, absent in the newer.
@@ -16,6 +16,10 @@ Six kinds of finding:
                 banner served from a different OS stack, or the same host
                 suddenly a different number of hops away, means something
                 moved underneath a service that looks identical on the wire.
+- topology_change  host-scoped (port is NULL): the number of backends behind
+                one address changed, or its device class flipped. Both are
+                changes to the *shape* of a host rather than to any one of its
+                services, which is why they can't ride on `changed`.
 
 Each finding lands in scan_diffs keyed by (from_scan_id, to_scan_id, kind, ip,
 port). A detail JSON blob carries the kind-specific fields so the UI can
@@ -29,7 +33,8 @@ from dataclasses import dataclass
 from typing import Any
 
 KINDS = (
-    "new_service", "gone_service", "changed", "new_cert", "new_host", "path_changed",
+    "new_service", "gone_service", "changed", "new_cert", "new_host",
+    "path_changed", "topology_change",
 )
 
 
@@ -41,12 +46,13 @@ class DiffCounts:
     new_cert: int = 0
     new_host: int = 0
     path_changed: int = 0
+    topology_change: int = 0
 
     @property
     def total(self) -> int:
         return (
             self.new_service + self.gone_service + self.changed + self.new_cert
-            + self.new_host + self.path_changed
+            + self.new_host + self.path_changed + self.topology_change
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -57,6 +63,7 @@ class DiffCounts:
             "new_cert": self.new_cert,
             "new_host": self.new_host,
             "path_changed": self.path_changed,
+            "topology_change": self.topology_change,
             "total": self.total,
         }
 
@@ -89,6 +96,7 @@ def compute_and_store(
         new_cert=_insert_new_certs(conn, from_scan_id, to_scan_id),
         new_host=_insert_new_hosts(conn, from_scan_id, to_scan_id),
         path_changed=_insert_path_changed(conn, from_scan_id, to_scan_id),
+        topology_change=_insert_topology_change(conn, from_scan_id, to_scan_id),
     )
     return counts
 
@@ -250,6 +258,55 @@ def _insert_path_changed(conn: sqlite3.Connection, f: int, t: int) -> int:
                  hop_from, hop_to) in rows
         ],
     )
+
+
+def _insert_topology_change(conn: sqlite3.Connection, f: int, t: int) -> int:
+    """Backend count or device class changed for a host present in both scans.
+
+    Both sides must be non-NULL for each compared field, for the same reason
+    path_changed requires it: an absent value means "not computed" (enrichment
+    off, older scan), not "changed to nothing".
+    """
+    rows = conn.execute(
+        """
+        SELECT a.ip,
+               a.min_backend_count, b.min_backend_count,
+               a.device_type, b.device_type,
+               b.backend_evidence
+        FROM hosts a
+        JOIN hosts b USING (ip)
+        WHERE a.scan_id = ? AND b.scan_id = ?
+          AND ((a.min_backend_count IS NOT NULL AND b.min_backend_count IS NOT NULL
+                AND a.min_backend_count != b.min_backend_count)
+            OR (a.device_type IS NOT NULL AND b.device_type IS NOT NULL
+                AND a.device_type != b.device_type))
+        """,
+        (f, t),
+    ).fetchall()
+    return _insert_diff_rows(
+        conn, f, t, "topology_change",
+        [
+            (
+                ip, None,
+                {
+                    "min_backend_count": {"from": bc_from, "to": bc_to},
+                    "device_type": {"from": dt_from, "to": dt_to},
+                    "evidence": _load_evidence(evidence),
+                },
+            )
+            for ip, bc_from, bc_to, dt_from, dt_to, evidence in rows
+        ],
+    )
+
+
+def _load_evidence(raw: Any) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _insert_new_hosts(conn: sqlite3.Connection, f: int, t: int) -> int:

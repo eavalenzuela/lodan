@@ -21,6 +21,7 @@ from lodan.enrich import cve as cve_enrich
 from lodan.enrich import cve_data
 from lodan.enrich.device import enrich_devices
 from lodan.enrich.hosts import enrich_hosts
+from lodan.enrich.topology import enrich_topology
 from lodan.paths import workspace_config, workspace_db, workspace_scan_log
 from lodan.probes import dispatch as probe_dispatch
 from lodan.probes.runner import ProbeBudget, run_probes
@@ -48,6 +49,7 @@ class ScanSummary:
         self.hosts_fingerprinted = 0
         self.hosts_enriched = 0
         self.devices_classified = 0
+        self.nat_suspected = 0
         self.vulns_matched = 0
         self.findings = 0
         self.diff_total = 0
@@ -201,12 +203,17 @@ async def run_scan(
                 # fingerprint and the (just-recorded) favicon labels, so it
                 # needs every other enrichment to have landed first.
                 summary.devices_classified = enrich_devices(conn, handle.scan_id)
+                # Backend correlation reads the same per-port fingerprints; it
+                # runs after device classification so both land on `hosts` in
+                # one pass over the scan.
+                summary.nat_suspected = enrich_topology(conn, handle.scan_id)
             if summary.hosts_enriched or cfg.enrich.cve or summary.devices_classified:
                 alog.event(
                     "enrichment_completed",
                     hosts_enriched=summary.hosts_enriched,
                     vulns_matched=summary.vulns_matched,
                     devices_classified=summary.devices_classified,
+                    nat_suspected=summary.nat_suspected,
                 )
             summary.findings = findings.run_findings(conn, handle.scan_id)
             if summary.findings:
