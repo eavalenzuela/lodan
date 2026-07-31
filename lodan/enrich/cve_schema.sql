@@ -9,6 +9,14 @@ CREATE TABLE IF NOT EXISTS cve_cpe (
   cvss REAL,                        -- CVSSv3.1 baseScore when present, else v3.0, else v2
   published TEXT,                   -- ISO-8601
   last_modified TEXT,
+  -- Version bounds from NVD's cpeMatch. The majority of modern advisories are
+  -- expressed as a range against a wildcard CPE ("cpe:...:httpd:*:*" plus
+  -- versionEndExcluding 2.4.55) rather than as one row per affected version,
+  -- so without these a prefix match can never fire for them.
+  version_start TEXT,
+  version_start_inclusive INTEGER,  -- 1 = Including, 0 = Excluding
+  version_end TEXT,
+  version_end_inclusive INTEGER,
   PRIMARY KEY (cpe, cve)
 );
 

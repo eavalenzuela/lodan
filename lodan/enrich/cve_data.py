@@ -38,6 +38,12 @@ class CVERecord:
     cvss: float | None
     published: str | None
     last_modified: str | None
+    # NVD range bounds. Present on the wildcard-version rows that express
+    # "everything up to X" — the majority of modern advisories.
+    version_start: str | None = None
+    version_start_inclusive: bool | None = None
+    version_end: str | None = None
+    version_end_inclusive: bool | None = None
 
 
 @dataclass
@@ -52,10 +58,31 @@ def _schema_sql() -> str:
     return (files("lodan.enrich") / "cve_schema.sql").read_text(encoding="utf-8")
 
 
+# Columns added to cve_cpe after the initial schema shipped. Applied before
+# schema.sql runs so an existing ~/.lodan/data/nvd/cve.db gains them without a
+# re-download of the whole NVD snapshot.
+_CVE_CPE_COLUMN_MIGRATIONS = (
+    ("version_start", "TEXT"),
+    ("version_start_inclusive", "INTEGER"),
+    ("version_end", "TEXT"),
+    ("version_end_inclusive", "INTEGER"),
+)
+
+
+def _migrate_cve_cpe_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(cve_cpe)")}
+    if not existing:
+        return  # fresh DB — the schema below creates every column
+    for name, col_type in _CVE_CPE_COLUMN_MIGRATIONS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE cve_cpe ADD COLUMN {name} {col_type}")
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     p = path or nvd_db()
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p, isolation_level=None)
+    _migrate_cve_cpe_columns(conn)
     conn.executescript(_schema_sql())
     return conn
 
@@ -97,6 +124,12 @@ def parse_record(vuln: dict[str, Any]) -> list[CVERecord]:
                 cpe = match.get("criteria")
                 if not cpe:
                     continue
+                start, start_incl = _bound(
+                    match, "versionStartIncluding", "versionStartExcluding"
+                )
+                end, end_incl = _bound(
+                    match, "versionEndIncluding", "versionEndExcluding"
+                )
                 rows.append(
                     CVERecord(
                         cpe=cpe,
@@ -104,9 +137,31 @@ def parse_record(vuln: dict[str, Any]) -> list[CVERecord]:
                         cvss=cvss,
                         published=published,
                         last_modified=modified,
+                        version_start=start,
+                        version_start_inclusive=start_incl,
+                        version_end=end,
+                        version_end_inclusive=end_incl,
                     )
                 )
     return rows
+
+
+def _bound(
+    match: dict[str, Any], including_key: str, excluding_key: str
+) -> tuple[str | None, bool | None]:
+    """Read one side of an NVD version range.
+
+    NVD names the inclusivity in the key itself rather than in a flag, and
+    never sets both forms for the same side; Including wins if a record ever
+    does.
+    """
+    value = match.get(including_key)
+    if isinstance(value, str) and value:
+        return value, True
+    value = match.get(excluding_key)
+    if isinstance(value, str) and value:
+        return value, False
+    return None, None
 
 
 def _best_cvss(metrics: dict[str, Any]) -> float | None:
@@ -156,14 +211,31 @@ def upsert(conn: sqlite3.Connection, records: list[CVERecord]) -> int:
         return 0
     conn.executemany(
         """
-        INSERT INTO cve_cpe (cpe, cve, cvss, published, last_modified)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO cve_cpe (
+            cpe, cve, cvss, published, last_modified,
+            version_start, version_start_inclusive,
+            version_end, version_end_inclusive
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cpe, cve) DO UPDATE SET
             cvss = excluded.cvss,
             published = excluded.published,
-            last_modified = excluded.last_modified
+            last_modified = excluded.last_modified,
+            version_start = excluded.version_start,
+            version_start_inclusive = excluded.version_start_inclusive,
+            version_end = excluded.version_end,
+            version_end_inclusive = excluded.version_end_inclusive
         """,
-        [(r.cpe, r.cve, r.cvss, r.published, r.last_modified) for r in records],
+        [
+            (
+                r.cpe, r.cve, r.cvss, r.published, r.last_modified,
+                r.version_start,
+                None if r.version_start_inclusive is None else int(r.version_start_inclusive),
+                r.version_end,
+                None if r.version_end_inclusive is None else int(r.version_end_inclusive),
+            )
+            for r in records
+        ],
     )
     return len(records)
 

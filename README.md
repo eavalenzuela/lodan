@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 771+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 832+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -26,6 +26,14 @@ end-to-end:
 - Offline enrichment: rDNS, ASN/org + country via IP2Location LITE
   (token-based auto-download of both DB-ASN and DB1), CVE matching
   against the NVD 2.0 snapshot.
+- Version-range CVE matching: CPEs are built from the structured version
+  fields probes already parse (Redis `redis_version`, Docker `Version`,
+  k8s `gitVersion`, Elasticsearch, MongoDB, MySQL, OpenSSH), not just banner
+  prose — so whole protocol families that previously matched nothing now get
+  coverage. NVD's `versionStartIncluding` / `versionEndExcluding` bounds are
+  ingested and evaluated, which both surfaces range-expressed advisories (the
+  majority of modern NVD entries, previously unmatchable) and suppresses
+  false positives on patched versions.
 - Passive TCP/IP stack fingerprinting off the discovery SYN-ACK — no extra
   packet: a canonical `stack_sig` (initial-TTL guess, window, MSS, window
   scale, TCP option order), an `os_family` guess, `hop_count`, and a
