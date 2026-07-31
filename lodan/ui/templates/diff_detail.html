@@ -74,6 +74,17 @@
                   <small class="muted">{{ e.dimension }}: {{ e.values | join(" / ") }}
                   {%- if not e.conclusive %} (suggestive){% endif %}</small><br>
                 {% endfor %}
+              {% elif kind == "risk_increased" %}
+                {{ d.reasons | join(", ") }}<br>
+                {% for item in d["items"] %}
+                  <small class="muted">
+                    {%- if item.cve %}{{ item.cve }}
+                      {%- if item.priority %} — {{ item.priority.from or "?" }} →
+                        <ins>{{ item.priority.to or "?" }}</ins>{% endif %}
+                      {%- if item.epss %} (EPSS {{ "%.3f" | format(item.epss) }}){% endif %}
+                    {%- else %}{{ item.detail }}{% endif %}
+                  </small><br>
+                {% endfor %}
               {% endif %}
             </td>
           </tr>

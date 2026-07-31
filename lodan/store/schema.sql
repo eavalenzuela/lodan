@@ -156,7 +156,16 @@ CREATE TABLE IF NOT EXISTS vulns (
   cve TEXT NOT NULL,
   cpe TEXT,
   confidence REAL,
-  source TEXT
+  source TEXT,
+  -- Exploit-awareness, joined from the shared EPSS/KEV snapshots. `priority`
+  -- is an ordering for remediation, not another severity score: KEV
+  -- (confirmed exploited) outranks any CVSS or EPSS value.
+  epss REAL,                      -- probability of exploitation in 30 days
+  epss_percentile REAL,
+  kev INTEGER,                    -- 1 = on CISA's Known Exploited list
+  kev_date_added TEXT,
+  ransomware INTEGER,             -- 1 = CISA notes known ransomware use
+  priority TEXT                   -- critical | high | medium | low
 );
 
 CREATE INDEX IF NOT EXISTS vulns_scan ON vulns(scan_id, ip, port);

@@ -29,6 +29,7 @@ _LABELS = (
     ("new_host", "new host(s)"),
     ("path_changed", "path/stack changed"),
     ("topology_change", "topology changed"),
+    ("risk_increased", "risk increased"),
 )
 
 

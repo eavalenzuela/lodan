@@ -64,9 +64,20 @@ def _migrate_columns(
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {col_type}")
 
 
+_VULNS_COLUMN_MIGRATIONS = (
+    ("epss", "REAL"),
+    ("epss_percentile", "REAL"),
+    ("kev", "INTEGER"),
+    ("kev_date_added", "TEXT"),
+    ("ransomware", "INTEGER"),
+    ("priority", "TEXT"),
+)
+
+
 def _migrate_services_columns(conn: sqlite3.Connection) -> None:
     _migrate_columns(conn, "services", _SERVICES_COLUMN_MIGRATIONS)
     _migrate_columns(conn, "hosts", _HOSTS_COLUMN_MIGRATIONS)
+    _migrate_columns(conn, "vulns", _VULNS_COLUMN_MIGRATIONS)
 
 
 # Single-column pivot indexes superseded by the partial composite ones in

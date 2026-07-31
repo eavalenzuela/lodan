@@ -759,7 +759,8 @@ def _diff_pairs(db: sqlite3.Connection) -> list[dict]:
                 "from_scan_id": f, "to_scan_id": t,
                 "counts": {"new_service": 0, "gone_service": 0, "changed": 0,
                            "new_cert": 0, "new_host": 0, "path_changed": 0,
-                           "topology_change": 0, "total": 0},
+                           "topology_change": 0, "risk_increased": 0,
+                           "total": 0},
             },
         )
         entry["counts"][kind] = count

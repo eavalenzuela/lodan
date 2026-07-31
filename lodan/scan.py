@@ -18,10 +18,11 @@ from lodan.discovery.base import DiscoveryBackend, DiscoverySpec
 from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
 from lodan.enrich import cve as cve_enrich
-from lodan.enrich import cve_data
+from lodan.enrich import cve_data, risk_data
 from lodan.enrich.device import enrich_devices
 from lodan.enrich.hosts import enrich_hosts
 from lodan.enrich.keyposture import enrich_key_posture
+from lodan.enrich.risk import enrich_risk
 from lodan.enrich.topology import enrich_topology
 from lodan.paths import workspace_config, workspace_db, workspace_scan_log
 from lodan.probes import dispatch as probe_dispatch
@@ -52,6 +53,7 @@ class ScanSummary:
         self.devices_classified = 0
         self.nat_suspected = 0
         self.weak_keys = 0
+        self.eol_findings = 0
         self.vulns_matched = 0
         self.findings = 0
         self.diff_total = 0
@@ -220,6 +222,12 @@ async def run_scan(
                     nat_suspected=summary.nat_suspected,
                 )
             summary.findings = findings.run_findings(conn, handle.scan_id)
+            if cfg.enrich.risk:
+                # Joins the offline EPSS / KEV / EOL snapshots onto the vulns
+                # and services this scan produced. Runs after CVE matching (it
+                # scores those rows) and after findings (it adds `eol` ones).
+                summary.eol_findings = _run_risk_enrichment(conn, handle.scan_id)
+                summary.findings += summary.eol_findings
             if cfg.enrich.key_posture:
                 # Runs after run_findings because it writes its own findings
                 # rows directly (and a vulns row for ROCA), and run_findings
@@ -342,6 +350,25 @@ def _run_cve_enrichment(workspace_conn, scan_id: int) -> int:
         return cve_enrich.enrich_cves(workspace_conn, cve_conn, scan_id)
     finally:
         cve_conn.close()
+
+
+def _run_risk_enrichment(workspace_conn, scan_id: int) -> int:
+    """Score vulns by EPSS/KEV and flag EOL software.
+
+    Shares the NVD database file with the CVE tables. Noop until the operator
+    has run `lodan update --risk`; returns the number of EOL findings added.
+    """
+    from lodan.paths import nvd_db
+
+    if not nvd_db().exists():
+        return 0
+    risk_conn = cve_data.connect()
+    try:
+        risk_data.ensure_schema(risk_conn)
+        _prioritized, eol_count = enrich_risk(workspace_conn, risk_conn, scan_id)
+        return eol_count
+    finally:
+        risk_conn.close()
 
 
 def run_scan_sync(

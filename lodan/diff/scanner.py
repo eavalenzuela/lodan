@@ -1,6 +1,6 @@
 """Compute and persist the delta between two scans.
 
-Seven kinds of finding:
+Eight kinds of finding:
 
 - new_service   (ip, port, proto) present in the newer scan, absent in the older.
 - gone_service  present in the older scan, absent in the newer.
@@ -20,6 +20,11 @@ Seven kinds of finding:
                 one address changed, or its device class flipped. Both are
                 changes to the *shape* of a host rather than to any one of its
                 services, which is why they can't ride on `changed`.
+- risk_increased  a service that did not move on the wire nonetheless became
+                more dangerous: a CVE it already had went onto CISA KEV, its
+                remediation priority rose, or its software crossed an
+                end-of-support date. Every other kind here is topology; this
+                one is posture.
 
 Each finding lands in scan_diffs keyed by (from_scan_id, to_scan_id, kind, ip,
 port). A detail JSON blob carries the kind-specific fields so the UI can
@@ -34,7 +39,7 @@ from typing import Any
 
 KINDS = (
     "new_service", "gone_service", "changed", "new_cert", "new_host",
-    "path_changed", "topology_change",
+    "path_changed", "topology_change", "risk_increased",
 )
 
 
@@ -47,12 +52,14 @@ class DiffCounts:
     new_host: int = 0
     path_changed: int = 0
     topology_change: int = 0
+    risk_increased: int = 0
 
     @property
     def total(self) -> int:
         return (
             self.new_service + self.gone_service + self.changed + self.new_cert
             + self.new_host + self.path_changed + self.topology_change
+            + self.risk_increased
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -64,6 +71,7 @@ class DiffCounts:
             "new_host": self.new_host,
             "path_changed": self.path_changed,
             "topology_change": self.topology_change,
+            "risk_increased": self.risk_increased,
             "total": self.total,
         }
 
@@ -97,6 +105,7 @@ def compute_and_store(
         new_host=_insert_new_hosts(conn, from_scan_id, to_scan_id),
         path_changed=_insert_path_changed(conn, from_scan_id, to_scan_id),
         topology_change=_insert_topology_change(conn, from_scan_id, to_scan_id),
+        risk_increased=_insert_risk_increased(conn, from_scan_id, to_scan_id),
     )
     return counts
 
@@ -296,6 +305,88 @@ def _insert_topology_change(conn: sqlite3.Connection, f: int, t: int) -> int:
             )
             for ip, bc_from, bc_to, dt_from, dt_to, evidence in rows
         ],
+    )
+
+
+_PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _insert_risk_increased(conn: sqlite3.Connection, f: int, t: int) -> int:
+    """A service got more dangerous while standing still.
+
+    Three ways that happens with nothing changing on the wire: a CVE the host
+    already had became known-exploited (newly on CISA KEV), its remediation
+    priority rose, or its software crossed an end-of-support date. The rest of
+    the diff engine is topology-only and blind to all three.
+
+    Scoped to services present in BOTH scans — a brand-new service is already
+    reported as new_service, and calling it "increased risk" as well would
+    double-count it.
+    """
+    rows = conn.execute(
+        """
+        SELECT b.ip, b.port, b.cve, a.priority, b.priority,
+               COALESCE(a.kev, 0), COALESCE(b.kev, 0), b.epss
+        FROM vulns b
+        JOIN vulns a ON a.ip = b.ip AND a.port = b.port AND a.cve = b.cve
+                    AND a.scan_id = ?
+        WHERE b.scan_id = ?
+          AND ((COALESCE(a.kev, 0) = 0 AND COALESCE(b.kev, 0) = 1)
+            OR (a.priority IS NOT NULL AND b.priority IS NOT NULL
+                AND a.priority != b.priority))
+        """,
+        (f, t),
+    ).fetchall()
+
+    findings: list[tuple[str, int | None, dict[str, Any]]] = []
+    for ip, port, cve, prio_from, prio_to, kev_from, kev_to, epss in rows:
+        newly_kev = not kev_from and bool(kev_to)
+        rose = (
+            prio_from in _PRIORITY_RANK and prio_to in _PRIORITY_RANK
+            and _PRIORITY_RANK[prio_to] < _PRIORITY_RANK[prio_from]
+        )
+        if not (newly_kev or rose):
+            continue    # priority fell — good news, not a risk increase
+        findings.append((ip, port, {
+            "reason": "newly-kev" if newly_kev else "priority-raised",
+            "cve": cve,
+            "priority": {"from": prio_from, "to": prio_to},
+            "kev": {"from": bool(kev_from), "to": bool(kev_to)},
+            "epss": epss,
+        }))
+
+    # Newly end-of-life software, from the findings table.
+    eol_rows = conn.execute(
+        """
+        SELECT b.ip, b.port, b.title
+        FROM findings b
+        WHERE b.scan_id = ? AND b.category = 'eol'
+          AND NOT EXISTS (
+            SELECT 1 FROM findings a
+            WHERE a.scan_id = ? AND a.category = 'eol'
+              AND a.ip = b.ip AND COALESCE(a.port, -1) = COALESCE(b.port, -1)
+          )
+          AND EXISTS (
+            SELECT 1 FROM services s
+            WHERE s.scan_id = ? AND s.ip = b.ip AND s.port = b.port
+          )
+        """,
+        (t, f, f),
+    ).fetchall()
+    for ip, port, title in eol_rows:
+        findings.append((ip, port, {"reason": "newly-eol", "detail": title}))
+
+    # One row per (ip, port): scan_diffs is keyed on it, so several CVEs rising
+    # on the same service collapse into a single finding carrying all of them.
+    merged: dict[tuple[str, int | None], dict[str, Any]] = {}
+    for ip, port, detail in findings:
+        entry = merged.setdefault((ip, port), {"reasons": [], "items": []})
+        if detail["reason"] not in entry["reasons"]:
+            entry["reasons"].append(detail["reason"])
+        entry["items"].append(detail)
+    return _insert_diff_rows(
+        conn, f, t, "risk_increased",
+        [(ip, port, detail) for (ip, port), detail in merged.items()],
     )
 
 

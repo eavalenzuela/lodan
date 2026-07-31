@@ -115,14 +115,23 @@ def update_cmd(
             "Falls back to $LODAN_IP2LOCATION_TOKEN.",
         ),
     ] = None,
+    risk: Annotated[
+        bool,
+        typer.Option(
+            "--risk",
+            help="Refresh the EPSS / CISA KEV / end-of-life snapshots.",
+        ),
+    ] = False,
     max_pages: Annotated[
         int | None,
         typer.Option("--max-pages", help="Cap pages for a quick refresh."),
     ] = None,
 ) -> None:
-    """Refresh NVD + IP2Location snapshots under ~/.lodan/data/."""
-    if not (cves or ip2location):
-        err.print("[yellow]nothing to do[/]: pass --cves and/or --ip2location")
+    """Refresh NVD + IP2Location + risk snapshots under ~/.lodan/data/."""
+    if not (cves or ip2location or risk):
+        err.print(
+            "[yellow]nothing to do[/]: pass --cves, --ip2location and/or --risk"
+        )
         raise typer.Exit(1)
 
     if cves:
@@ -198,6 +207,29 @@ def update_cmd(
                     "  - download the LITE BIN(s) manually and place them at the paths above."
                 )
                 raise typer.Exit(1)
+
+    if risk:
+        import asyncio
+
+        from lodan.enrich import risk_data
+        from lodan.enrich.cve_data import connect as cve_connect
+
+        risk_data.bootstrap_dirs()
+        # Shares the NVD database file: one snapshot store, one place to prune.
+        conn = cve_connect()
+        try:
+            stats = asyncio.run(risk_data.update(conn))
+        finally:
+            conn.close()
+        console.print(
+            f"[green]risk datasets updated[/]: {stats.epss_rows} EPSS scores, "
+            f"{stats.kev_rows} KEV entries, {stats.eol_rows} EOL cycles"
+        )
+        if not (stats.epss_rows or stats.kev_rows or stats.eol_rows):
+            err.print(
+                "[yellow]no rows ingested[/]: check network access to "
+                "epss.cyentia.com, cisa.gov and endoflife.date"
+            )
 
 
 @app.command("scan")
@@ -277,7 +309,8 @@ def diff_cmd(
         f"{counts.new_service} new, {counts.gone_service} gone, "
         f"{counts.changed} changed, {counts.new_cert} new certs, "
         f"{counts.new_host} new hosts, {counts.path_changed} path changed, "
-        f"{counts.topology_change} topology changed ({counts.total} total)"
+        f"{counts.topology_change} topology changed, "
+        f"{counts.risk_increased} risk increased ({counts.total} total)"
     )
 
 

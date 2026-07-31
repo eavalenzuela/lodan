@@ -60,6 +60,8 @@ class EnrichBlock(BaseModel):
     # Offline scoring of captured public keys (TLS chain + SSH host keys),
     # including the ROCA fingerprint. Pure arithmetic; no traffic.
     key_posture: bool = True
+    # EPSS / KEV / EOL joins. Needs `lodan update --risk`; noop without it.
+    risk: bool = True
     keep_raw: bool = False
 
 

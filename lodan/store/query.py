@@ -9,6 +9,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
              | stack_sig | os_family | hop_count | clock_key
              | os_guess | device_type | nat_suspected | min_backend_count
              | jarm | chain_cert | chain_issuer
+             | kev | priority | epss | eol
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -39,6 +40,7 @@ _VALID_KEYS = {
     "stack_sig", "os_family", "hop_count", "clock_key",
     "os_guess", "device_type", "nat_suspected", "min_backend_count",
     "jarm", "chain_cert", "chain_issuer",
+    "kev", "priority", "epss", "eol",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -174,6 +176,45 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
 
     if key == "hostkey":
         return ("services.ssh_hostkey = ?", [value])
+
+    if key == "kev":
+        if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
+            raise QueryError(f"kev: expected true/false, got {value!r}")
+        want = value.lower() in ("true", "1", "yes")
+        sql = (
+            "(services.scan_id, services.ip, services.port) IN "
+            "(SELECT scan_id, ip, port FROM vulns WHERE COALESCE(kev, 0) = 1)"
+        )
+        return (sql if want else f"NOT ({sql})", [])
+
+    if key == "priority":
+        return (
+            "(services.scan_id, services.ip, services.port) IN "
+            "(SELECT scan_id, ip, port FROM vulns WHERE priority = ?)",
+            [value.lower()],
+        )
+
+    if key == "epss":
+        # ">= N" is the useful question; a float equality filter never matches.
+        try:
+            threshold = float(value)
+        except ValueError as e:
+            raise QueryError(f"epss: number expected, got {value!r}") from e
+        return (
+            "(services.scan_id, services.ip, services.port) IN "
+            "(SELECT scan_id, ip, port FROM vulns WHERE epss >= ?)",
+            [threshold],
+        )
+
+    if key == "eol":
+        if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
+            raise QueryError(f"eol: expected true/false, got {value!r}")
+        want = value.lower() in ("true", "1", "yes")
+        sql = (
+            "(services.scan_id, services.ip, services.port) IN "
+            "(SELECT scan_id, ip, port FROM findings WHERE category = 'eol')"
+        )
+        return (sql if want else f"NOT ({sql})", [])
 
     if key == "nat_suspected":
         if value.lower() not in ("true", "false", "1", "0", "yes", "no"):

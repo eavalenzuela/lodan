@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 832+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 871+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -34,6 +34,11 @@ end-to-end:
   ingested and evaluated, which both surfaces range-expressed advisories (the
   majority of modern NVD entries, previously unmatchable) and suppresses
   false positives on patched versions.
+- Rising-risk analysis from three offline snapshots (`lodan update --risk`):
+  FIRST **EPSS** exploitation probability, CISA **KEV** confirmed-exploited
+  status, and **end-of-life** dates. Every CVE match gets a `priority`
+  (critical / high / medium / low) where KEV outranks any score, and
+  out-of-support software is flagged even though it has no CVE of its own.
 - Passive TCP/IP stack fingerprinting off the discovery SYN-ACK — no extra
   packet: a canonical `stack_sig` (initial-TTL guess, window, MSS, window
   scale, TCP option order), an `os_family` guess, `hop_count`, and a
@@ -70,8 +75,10 @@ end-to-end:
 - Scan-to-scan diff: `new_service`, `gone_service`, `changed`,
   `new_cert` (workspace-scoped), `new_host`, `path_changed` (stack
   signature or hop count moved under a service that looks unchanged on the
-  wire), `topology_change` (backend count or device class flipped);
-  auto-computed after every scan.
+  wire), `topology_change` (backend count or device class flipped),
+  `risk_increased` (a service that did not move became more dangerous — newly
+  on KEV, priority raised, or newly end-of-life); auto-computed after every
+  scan.
 - FTS5-backed mini-DSL: `port:443 AND sans:*.corp.example.com`,
   `tech:nginx OR tech:apache`, `banner:OpenSSH*`, with the full
   grammar documented under [Query DSL](#query-dsl).
@@ -152,6 +159,7 @@ lodan prune home-lab --dry-run
 | `lodan init <ws> --cidrs …`    | create workspace, bootstrap SQLite schema |
 | `lodan update --cves`           | NVD 2.0 snapshot refresh (incremental) |
 | `lodan update --ip2location [--token T]` | download IP2Location LITE DB-ASN + DB1 (with token) or report status |
+| `lodan update --risk`           | refresh the EPSS / CISA KEV / end-of-life snapshots |
 | `lodan scan <ws>`               | discover + probe + enrich + auto-diff |
 | `lodan query <ws> "expr"`       | run a mini-DSL query; `--json` for JSONL |
 | `lodan findings <ws>`           | exposure / misconfiguration findings; `--severity`, `--scan`, `--json` |
@@ -173,6 +181,7 @@ key     := banner | tech | sans | port | service | ip
          | stack_sig | os_family | hop_count | clock_key
          | os_guess | device_type | nat_suspected | min_backend_count
          | jarm | chain_cert | chain_issuer
+         | kev | priority | epss | eol
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -199,6 +208,9 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
   signed by this CA") that the leaf-only `cert_fingerprint` pivot cannot.
 - `jarm:<fingerprint>` clusters by TLS configuration; populated only when
   `[scan] jarm = true`.
+- `kev:true`, `priority:critical`, `epss:0.5` (matches **at least** that
+  probability) and `eol:true` join through `vulns` / `findings`. They need
+  `lodan update --risk` to have been run.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
