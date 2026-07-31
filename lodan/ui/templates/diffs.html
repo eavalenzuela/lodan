@@ -4,7 +4,7 @@
 <h1>Diff timeline</h1>
 {% if pairs %}
 <table>
-  <thead><tr><th>from</th><th>→</th><th>to</th><th>new</th><th>gone</th><th>changed</th><th>new cert</th><th>new host</th><th>total</th></tr></thead>
+  <thead><tr><th>from</th><th>→</th><th>to</th><th>new</th><th>gone</th><th>changed</th><th>new cert</th><th>new host</th><th>path</th><th>total</th></tr></thead>
   <tbody>
     {% for p in pairs %}
       <tr>
@@ -16,6 +16,7 @@
         <td>{{ p.counts.changed }}</td>
         <td>{{ p.counts.new_cert }}</td>
         <td>{{ p.counts.new_host }}</td>
+        <td>{{ p.counts.path_changed }}</td>
         <td><a href="/diff/{{ p.from_scan_id }}/{{ p.to_scan_id }}">{{ p.counts.total }} →</a></td>
       </tr>
     {% endfor %}

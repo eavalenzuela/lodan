@@ -311,6 +311,38 @@ def create_app(
              "needle": fp, "matches": matches},
         )
 
+    @app.get("/pivot/stack/{sig}", response_class=HTMLResponse)
+    def pivot_stack(
+        request: Request,
+        sig: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        """Every port sharing one passive stack signature."""
+        matches = _pivot_exact(db, "stack_sig", sig)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "stack_sig",
+             "needle": sig, "matches": matches},
+        )
+
+    @app.get("/pivot/clock/{key}", response_class=HTMLResponse)
+    def pivot_clock(
+        request: Request,
+        key: str,
+        db: sqlite3.Connection = Depends(_db),  # noqa: B008
+    ) -> HTMLResponse:
+        """Addresses whose TCP-timestamp boot estimate lands in one bucket.
+
+        A grouping to investigate, not an identity claim — see
+        `discovery.fingerprint.clock_key`.
+        """
+        matches = _pivot_exact(db, "clock_key", key)
+        return templates.TemplateResponse(
+            request, "pivot.html",
+            {"workspace": workspace, "kind": "clock_key",
+             "needle": key, "matches": matches},
+        )
+
     @app.get("/pivot/san", response_class=HTMLResponse)
     def pivot_san(
         request: Request,
@@ -582,7 +614,8 @@ def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dic
     """Every IP seen in this scan's services, left-joined with any hosts row
     so enrichment-skipped scans still render."""
     query = (
-        "SELECT s.ip, h.rdns, h.asn, h.asn_org, h.country, COUNT(*) AS svc_count "
+        "SELECT s.ip, h.rdns, h.asn, h.asn_org, h.country, "
+        "h.os_family, h.hop_count, COUNT(*) AS svc_count "
         "FROM services s "
         "LEFT JOIN hosts h ON h.scan_id = s.scan_id AND h.ip = s.ip "
         "WHERE s.scan_id = ?"
@@ -591,16 +624,19 @@ def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dic
     if q:
         query += (
             " AND (s.ip LIKE ? OR COALESCE(h.rdns,'') LIKE ? "
-            "   OR COALESCE(h.asn_org,'') LIKE ?)"
+            "   OR COALESCE(h.asn_org,'') LIKE ? OR COALESCE(h.os_family,'') LIKE ?)"
         )
         like = f"%{q}%"
-        params.extend([like, like, like])
-    query += " GROUP BY s.ip, h.rdns, h.asn, h.asn_org, h.country ORDER BY s.ip"
+        params.extend([like, like, like, like])
+    query += (
+        " GROUP BY s.ip, h.rdns, h.asn, h.asn_org, h.country, h.os_family, h.hop_count"
+        " ORDER BY s.ip"
+    )
     rows = db.execute(query, params).fetchall()
     return [
         {
             "ip": r[0], "rdns": r[1], "asn": r[2], "asn_org": r[3], "country": r[4],
-            "service_count": r[5],
+            "os_family": r[5], "hop_count": r[6], "service_count": r[7],
         }
         for r in rows
     ]
@@ -634,13 +670,16 @@ def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[
 
 def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
     row = db.execute(
-        "SELECT ip, rdns, asn, asn_org, country FROM hosts WHERE scan_id = ? AND ip = ?",
+        "SELECT ip, rdns, asn, asn_org, country, stack_sig, os_family, os_confidence, "
+        "hop_count FROM hosts WHERE scan_id = ? AND ip = ?",
         (scan_id, ip),
     ).fetchone()
     if row is not None:
         return {
             "ip": row[0], "rdns": row[1], "asn": row[2],
             "asn_org": row[3], "country": row[4],
+            "stack_sig": row[5], "os_family": row[6], "os_confidence": row[7],
+            "hop_count": row[8],
         }
     # Host might not have a row if enrichment was off; synthesize a minimal one
     # as long as the IP shows up in services.
@@ -648,7 +687,11 @@ def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
         "SELECT 1 FROM services WHERE scan_id = ? AND ip = ? LIMIT 1", (scan_id, ip)
     ).fetchone()
     if hit:
-        return {"ip": ip, "rdns": None, "asn": None, "asn_org": None, "country": None}
+        return {
+            "ip": ip, "rdns": None, "asn": None, "asn_org": None, "country": None,
+            "stack_sig": None, "os_family": None, "os_confidence": None,
+            "hop_count": None,
+        }
     return None
 
 
@@ -658,10 +701,11 @@ def _services_for_host(db: sqlite3.Connection, scan_id: int, ip: str) -> list[di
             "port": r[0], "proto": r[1], "service": r[2], "banner": r[3],
             "cert_fingerprint": r[4], "ja3s": r[5], "ja4s": r[6],
             "ssh_hostkey": r[7], "tech": r[8],
+            "stack_sig": r[9], "os_family": r[10], "clock_key": r[11],
         }
         for r in db.execute(
             "SELECT port, proto, service, banner, cert_fingerprint, ja3s, ja4s, "
-            "ssh_hostkey, tech "
+            "ssh_hostkey, tech, stack_sig, os_family, clock_key "
             "FROM services WHERE scan_id = ? AND ip = ? ORDER BY port",
             (scan_id, ip),
         )
@@ -694,7 +738,8 @@ def _diff_pairs(db: sqlite3.Connection) -> list[dict]:
             {
                 "from_scan_id": f, "to_scan_id": t,
                 "counts": {"new_service": 0, "gone_service": 0, "changed": 0,
-                           "new_cert": 0, "new_host": 0, "total": 0},
+                           "new_cert": 0, "new_host": 0, "path_changed": 0,
+                           "total": 0},
             },
         )
         entry["counts"][kind] = count
@@ -722,8 +767,14 @@ def _diff_findings(
     return findings
 
 
+_PIVOT_COLUMNS = (
+    "cert_fingerprint", "favicon_mmh3", "ja3s", "ja4s", "ssh_hostkey",
+    "stack_sig", "clock_key",
+)
+
+
 def _pivot_exact(db: sqlite3.Connection, column: str, value) -> list[dict]:
-    if column not in ("cert_fingerprint", "favicon_mmh3", "ja3s", "ja4s", "ssh_hostkey"):
+    if column not in _PIVOT_COLUMNS:
         raise ValueError(f"not a pivotable column: {column}")
     rows = db.execute(
         f"SELECT scan_id, ip, port, service, banner, {column} "

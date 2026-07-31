@@ -23,10 +23,37 @@ class DiscoverySpec:
 
 
 @dataclass(frozen=True)
+class StackObservation:
+    """L3/L4 header fields lifted off a discovery SYN-ACK.
+
+    Every field here is something the responder volunteered in reply to the
+    SYN discovery already sent — capturing it costs no additional packet.
+
+    Only backends that see the raw packet can fill this in. naabu's connect
+    scan exposes no L3/L4 fields, and masscan's `-oL` list output carries no
+    TTL, so both leave `DiscoveryResult.stack` as None and every derived
+    column degrades to NULL.
+    """
+
+    ttl: int                              # IPv4 TTL or IPv6 hop limit
+    window: int                           # advertised TCP receive window
+    df: bool = False                      # IPv4 Don't-Fragment bit
+    ip_id: int | None = None              # IPv4 identification field
+    mss: int | None = None
+    window_scale: int | None = None
+    sack_ok: bool = False
+    timestamps: bool = False
+    ts_val: int | None = None             # TSval, for the clock-skew estimate
+    options: tuple[str, ...] = ()         # TCP option kinds, in wire order
+    observed_at: float | None = None      # epoch seconds the reply landed
+
+
+@dataclass(frozen=True)
 class DiscoveryResult:
     ip: str
     port: int
     proto: Literal["tcp", "udp"]
+    stack: StackObservation | None = None
 
 
 @runtime_checkable

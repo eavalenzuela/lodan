@@ -6,6 +6,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
     term    := NOT? key ':' value
     key     := banner | tech | sans | port | service | ip
              | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
+             | stack_sig | os_family | hop_count | clock_key
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -33,6 +34,7 @@ _VALID_KEYS = {
     "port", "service", "ip",
     "favicon_mmh3", "ja3", "ja3s", "ja4", "ja4s", "hostkey",
     "cve",
+    "stack_sig", "os_family", "hop_count", "clock_key",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -130,7 +132,7 @@ def _emit(tree: OrQuery) -> tuple[str, list[Any]]:
     return " OR ".join(or_sqls), params
 
 
-_INT_KEYS = {"port", "favicon_mmh3"}
+_INT_KEYS = {"port", "favicon_mmh3", "hop_count"}
 
 
 def _emit_term(term: Term) -> tuple[str, list[Any]]:
@@ -168,6 +170,13 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
 
     if key == "hostkey":
         return ("services.ssh_hostkey = ?", [value])
+
+    if key in ("stack_sig", "os_family", "clock_key"):
+        # stack_sig carries ':' separators, so a trailing wildcard ("64:*") is
+        # the natural way to group every host sharing an initial TTL.
+        if "*" in value:
+            return (f"COALESCE(services.{key},'') LIKE ?", [value.replace("*", "%")])
+        return (f"services.{key} = ?", [value])
 
     if key == "cve":
         return (
@@ -220,6 +229,7 @@ SERVICE_COLUMNS = (
     "scan_id", "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3", "ja3s", "ja4", "ja4s",
     "ssh_hostkey", "favicon_mmh3", "tech",
+    "stack_sig", "os_family", "hop_count", "clock_key",
 )
 _VALID_COLS = set(SERVICE_COLUMNS)
 _SAFE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

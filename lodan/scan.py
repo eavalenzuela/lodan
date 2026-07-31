@@ -44,6 +44,7 @@ class ScanSummary:
         self.services_discovered = 0
         self.authz_rejections = 0
         self.services_probed = 0
+        self.hosts_fingerprinted = 0
         self.hosts_enriched = 0
         self.vulns_matched = 0
         self.findings = 0
@@ -151,6 +152,7 @@ async def run_scan(
                     else:
                         writer.upsert_discovered_service(
                             conn, handle, ip, result.port, result.proto,
+                            stack=result.stack,
                         )
                         summary.services_discovered += 1
                     pending += 1
@@ -160,10 +162,14 @@ async def run_scan(
                         pending = 0
             finally:
                 _commit_pending(conn)
+            # Roll the per-port passive fingerprints up to a host consensus.
+            # Cheap read-modify-write over rows we just wrote; no traffic.
+            summary.hosts_fingerprinted = writer.record_host_stack(conn, handle)
             alog.event(
                 "discovery_completed",
                 services_discovered=summary.services_discovered,
                 authz_rejections=summary.authz_rejections,
+                hosts_fingerprinted=summary.hosts_fingerprinted,
             )
             if probes:
                 probe_dispatch.register_defaults()

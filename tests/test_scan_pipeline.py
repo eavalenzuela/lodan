@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from lodan.cli import app
-from lodan.discovery.base import DiscoveryResult, DiscoverySpec
+from lodan.discovery.base import DiscoveryResult, DiscoverySpec, StackObservation
 from lodan.discovery.fake import FakeBackend
 from lodan.paths import workspace_db, workspace_dir, workspace_scan_log
 from lodan.probes import dispatch as probe_dispatch
@@ -71,6 +71,37 @@ def test_scan_writes_services(workspace: str) -> None:
     assert rows == [("10.0.0.5", 22, "tcp"), ("10.0.0.5", 443, "tcp"), ("10.0.0.7", 53, "udp")]
     (status,) = conn.execute("SELECT status FROM scans WHERE id = ?", (summary.scan_id,)).fetchone()
     assert status == "completed"
+    conn.close()
+
+
+def test_scan_derives_and_rolls_up_stack_fingerprints(workspace: str) -> None:
+    """A backend that saw the raw SYN-ACK gets stack columns end-to-end."""
+    linux = StackObservation(
+        ttl=62, window=64240, df=True, mss=1460, window_scale=7,
+        sack_ok=True, timestamps=True,
+        options=("MSS", "SAckOK", "Timestamp", "NOP", "WScale"),
+    )
+    _register_fake([
+        DiscoveryResult("10.0.0.5", 22, "tcp", stack=linux),
+        DiscoveryResult("10.0.0.5", 443, "tcp", stack=linux),
+        DiscoveryResult("10.0.0.7", 80, "tcp"),  # backend saw no raw packet
+    ])
+    summary = run_scan_sync(workspace)
+    assert summary.hosts_fingerprinted == 1
+
+    conn = sqlite3.connect(workspace_db(workspace))
+    svc = dict(
+        conn.execute(
+            "SELECT port, os_family FROM services WHERE ip = '10.0.0.5'"
+        ).fetchall()
+    )
+    assert svc == {22: "linux", 443: "linux"}
+    host = conn.execute(
+        "SELECT os_family, hop_count FROM hosts WHERE ip = '10.0.0.5'"
+    ).fetchone()
+    assert host == ("linux", 2)
+    # The stack-less result gets no host row from the rollup.
+    assert conn.execute("SELECT COUNT(*) FROM hosts WHERE ip = '10.0.0.7'").fetchone()[0] == 0
     conn.close()
 
 

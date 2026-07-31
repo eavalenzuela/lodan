@@ -46,6 +46,17 @@
                 <a href="/pivot/cert/{{ d.cert_fingerprint }}">{{ d.cert_fingerprint | short_fp }}</a>
               {% elif kind == "new_host" %}
                 new IP in workspace
+              {% elif kind == "path_changed" %}
+                {% if d.stack_sig.from != d.stack_sig.to %}
+                  stack: <del>{{ d.stack_sig.from or "∅" }}</del> →
+                  <ins>{{ d.stack_sig.to or "∅" }}</ins>
+                  {% if d.os_family.from != d.os_family.to %}
+                    ({{ d.os_family.from or "?" }} → {{ d.os_family.to or "?" }})
+                  {% endif %}<br>
+                {% endif %}
+                {% if d.hop_count.from != d.hop_count.to %}
+                  hops: <del>{{ d.hop_count.from }}</del> → <ins>{{ d.hop_count.to }}</ins>
+                {% endif %}
               {% endif %}
             </td>
           </tr>

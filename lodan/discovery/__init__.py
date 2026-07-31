@@ -1,3 +1,13 @@
-from lodan.discovery.base import DiscoveryBackend, DiscoveryResult, DiscoverySpec
+from lodan.discovery.base import (
+    DiscoveryBackend,
+    DiscoveryResult,
+    DiscoverySpec,
+    StackObservation,
+)
 
-__all__ = ["DiscoveryBackend", "DiscoveryResult", "DiscoverySpec"]
+__all__ = [
+    "DiscoveryBackend",
+    "DiscoveryResult",
+    "DiscoverySpec",
+    "StackObservation",
+]

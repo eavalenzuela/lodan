@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS hosts (
   asn INTEGER,
   asn_org TEXT,
   country TEXT,
+  -- Host-level consensus of the per-service passive stack fingerprint.
+  -- Unanimous-or-NULL: ports that disagree are the NAT/load-balancer signal,
+  -- so they are left NULL here rather than collapsed to a majority.
+  stack_sig TEXT,
+  os_family TEXT,
+  os_confidence REAL,
+  hop_count INTEGER,
   PRIMARY KEY (scan_id, ip)
 );
 
@@ -42,6 +49,15 @@ CREATE TABLE IF NOT EXISTS services (
   favicon_mmh3 INTEGER,
   tech TEXT,                      -- JSON array
   raw BLOB,                       -- JSON blob, probe-specific
+  -- Passive stack fingerprint, derived from the discovery SYN-ACK. Set at
+  -- discovery time (not probe time) and only by backends that see the raw
+  -- packet; NULL everywhere else. Per-port rather than per-host because
+  -- disagreement across ports of one IP is itself a topology signal.
+  stack_sig TEXT,
+  os_family TEXT,
+  os_confidence REAL,
+  hop_count INTEGER,
+  clock_key TEXT,                 -- bucketed boot-time estimate from TSval
   PRIMARY KEY (scan_id, ip, port, proto)
 );
 
@@ -72,6 +88,17 @@ CREATE INDEX IF NOT EXISTS services_pivot_ja4s
   ON services(ja4s, scan_id DESC, ip, port) WHERE ja4s IS NOT NULL;
 CREATE INDEX IF NOT EXISTS services_pivot_hostkey
   ON services(ssh_hostkey, scan_id DESC, ip, port) WHERE ssh_hostkey IS NOT NULL;
+
+-- Stack-fingerprint pivots. Same partial+composite shape as above, but note
+-- the write-amplification argument differs: these are populated at DISCOVERY
+-- time, so on the scapy backend nearly every row carries a value and the
+-- partial predicate excludes little. It still pays for itself on the
+-- masscan/naabu backends, where the column is NULL for every row and the
+-- index stays empty.
+CREATE INDEX IF NOT EXISTS services_pivot_stack_sig
+  ON services(stack_sig, scan_id DESC, ip, port) WHERE stack_sig IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_clock_key
+  ON services(clock_key, scan_id DESC, ip, port) WHERE clock_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS vulns (
   scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -150,7 +177,8 @@ CREATE INDEX IF NOT EXISTS findings_scan ON findings(scan_id, severity);
 CREATE TABLE IF NOT EXISTS scan_diffs (
   from_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
   to_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,             -- new_service | gone_service | changed | new_cert | new_host
+  kind TEXT NOT NULL,             -- new_service | gone_service | changed
+                                  -- | new_cert | new_host | path_changed
   ip TEXT NOT NULL,
   port INTEGER,
   detail BLOB,                    -- JSON

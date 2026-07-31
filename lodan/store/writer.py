@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from lodan import normalize
+from lodan.discovery import fingerprint
+from lodan.discovery.base import StackObservation
 
 
 def _now() -> str:
@@ -127,12 +129,75 @@ def upsert_discovered_service(
     ip: str,
     port: int,
     proto: str,
+    stack: StackObservation | None = None,
 ) -> None:
-    """Insert an (ip, port, proto) row from port discovery. Pre-probe: service=NULL."""
+    """Insert an (ip, port, proto) row from port discovery. Pre-probe: service=NULL.
+
+    `stack` carries the passive fingerprint derived from this port's SYN-ACK
+    when the backend saw the raw packet; the derived columns stay NULL
+    otherwise. Deriving here (rather than in a later pass) keeps it on the
+    single write that already exists for every discovered port.
+    """
+    os_guess = fingerprint.os_family(stack)
     conn.execute(
-        "INSERT OR IGNORE INTO services (scan_id, ip, port, proto) VALUES (?, ?, ?, ?)",
-        (handle.scan_id, ip, port, proto),
+        "INSERT OR IGNORE INTO services "
+        "(scan_id, ip, port, proto, stack_sig, os_family, os_confidence, hop_count, clock_key) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            handle.scan_id, ip, port, proto,
+            fingerprint.stack_sig(stack),
+            os_guess.os_family if os_guess else None,
+            os_guess.confidence if os_guess else None,
+            fingerprint.hop_count(stack.ttl) if stack else None,
+            fingerprint.clock_key(stack),
+        ),
     )
+
+
+def record_host_stack(conn: sqlite3.Connection, handle: ScanHandle) -> int:
+    """Roll per-port stack fingerprints up to a host-level consensus.
+
+    Runs after discovery. `stack_sig` / `os_family` are unanimous-or-NULL so
+    that a host whose ports disagree stays visibly unresolved rather than
+    being asserted as one machine; `hop_count` takes the modal value since a
+    single odd route shouldn't erase the host's position in the topology.
+    """
+    rows = conn.execute(
+        "SELECT ip, stack_sig, os_family, os_confidence, hop_count FROM services "
+        "WHERE scan_id = ?",
+        (handle.scan_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    per_ip: dict[str, list[tuple[str | None, str | None, float | None, int | None]]] = {}
+    for ip, sig, family, confidence, hops in rows:
+        per_ip.setdefault(ip, []).append((sig, family, confidence, hops))
+
+    written = 0
+    for ip, entries in per_ip.items():
+        sig = fingerprint.consensus([e[0] for e in entries])
+        family = fingerprint.consensus([e[1] for e in entries])
+        hops = fingerprint.modal_hops([e[3] for e in entries])
+        # Confidence belongs to the agreed family; a split host has neither.
+        confidences = [e[2] for e in entries if e[1] == family and e[2] is not None]
+        confidence = max(confidences) if family and confidences else None
+        if sig is None and family is None and hops is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO hosts (scan_id, ip, stack_sig, os_family, os_confidence, hop_count)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scan_id, ip) DO UPDATE SET
+                stack_sig = excluded.stack_sig,
+                os_family = excluded.os_family,
+                os_confidence = excluded.os_confidence,
+                hop_count = excluded.hop_count
+            """,
+            (handle.scan_id, ip, sig, family, confidence, hops),
+        )
+        written += 1
+    return written
 
 
 def update_service_from_probe(

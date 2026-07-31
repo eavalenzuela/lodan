@@ -12,10 +12,11 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from lodan.discovery.base import DiscoveryResult, DiscoverySpec
+from lodan.discovery.base import DiscoveryResult, DiscoverySpec, StackObservation
 
 
 def _udp_payload(port: int) -> bytes:
@@ -80,21 +81,92 @@ def _sweep(spec: DiscoverySpec) -> list[tuple[Any, Any]]:
     return list(answered)
 
 
+def _observe_stack(rcv: Any, ttl: int, df: bool, ip_id: int | None) -> StackObservation | None:
+    """Lift the passive fingerprint fields off a SYN-ACK.
+
+    Reads only header fields already present in the reply. A malformed or
+    exotic option list degrades to whatever parsed cleanly rather than
+    failing discovery — a broken responder must never cost us the open-port
+    result itself.
+    """
+    from scapy.all import TCP  # type: ignore
+
+    tcp = rcv[TCP]
+    names: list[str] = []
+    mss: int | None = None
+    wscale: int | None = None
+    sack_ok = False
+    timestamps = False
+    ts_val: int | None = None
+    try:
+        raw_options = list(tcp.options or [])
+    except Exception:
+        raw_options = []
+    for entry in raw_options:
+        try:
+            name, value = entry
+        except (TypeError, ValueError):
+            continue
+        names.append(str(name))
+        if name == "MSS":
+            mss = int(value) if value is not None else None
+        elif name == "WScale":
+            wscale = int(value) if value is not None else None
+        elif name == "SAckOK":
+            sack_ok = True
+        elif name == "Timestamp":
+            timestamps = True
+            if isinstance(value, tuple) and value:
+                ts_val = int(value[0])
+    return StackObservation(
+        ttl=ttl,
+        window=int(tcp.window),
+        df=df,
+        ip_id=ip_id,
+        mss=mss,
+        window_scale=wscale,
+        sack_ok=sack_ok,
+        timestamps=timestamps,
+        ts_val=ts_val,
+        options=tuple(names),
+        observed_at=float(getattr(rcv, "time", None) or time.time()),
+    )
+
+
 def _classify(snd: Any, rcv: Any) -> DiscoveryResult | None:
     """Turn a (sent, received) scapy pair into a DiscoveryResult or None."""
     from scapy.all import IP, TCP, UDP, IPv6  # type: ignore
 
+    ttl: int | None = None
+    df = False
+    ip_id: int | None = None
     if IP in rcv:
         src: str | None = rcv[IP].src
+        ttl = int(rcv[IP].ttl)
+        # IPv4 flags is a scapy FlagValue; bit 1 is Don't-Fragment.
+        df = bool(int(rcv[IP].flags) & 0x02)
+        ip_id = int(rcv[IP].id)
     elif IPv6 in rcv:
         src = rcv[IPv6].src
+        ttl = int(rcv[IPv6].hlim)
+        # IPv6 has no in-transit fragmentation and no identification field,
+        # so DF is implicit and ip_id has no analogue.
+        df = True
     else:
         src = None
     if src is None:
         return None
     if TCP in rcv:
         if rcv[TCP].flags & 0x12 == 0x12:  # SYN+ACK
-            return DiscoveryResult(ip=str(src), port=int(snd[TCP].dport), proto="tcp")
+            stack = None
+            if ttl is not None:
+                try:
+                    stack = _observe_stack(rcv, ttl, df, ip_id)
+                except Exception:
+                    stack = None  # fingerprinting is never worth losing the hit
+            return DiscoveryResult(
+                ip=str(src), port=int(snd[TCP].dport), proto="tcp", stack=stack,
+            )
         return None
     if UDP in rcv:
         return DiscoveryResult(ip=str(src), port=int(snd[UDP].dport), proto="udp")

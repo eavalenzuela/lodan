@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 420+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 580+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -26,16 +26,24 @@ end-to-end:
 - Offline enrichment: rDNS, ASN/org + country via IP2Location LITE
   (token-based auto-download of both DB-ASN and DB1), CVE matching
   against the NVD 2.0 snapshot.
+- Passive TCP/IP stack fingerprinting off the discovery SYN-ACK — no extra
+  packet: a canonical `stack_sig` (initial-TTL guess, window, MSS, window
+  scale, TCP option order), an `os_family` guess, `hop_count`, and a
+  TCP-timestamp `clock_key` that clusters several IPs onto one physical
+  machine. Only the scapy backend sees the raw packet; masscan and naabu
+  leave every derived column NULL.
 - Scan-to-scan diff: `new_service`, `gone_service`, `changed`,
-  `new_cert` (workspace-scoped), `new_host`; auto-computed after every
-  scan.
+  `new_cert` (workspace-scoped), `new_host`, `path_changed` (stack
+  signature or hop count moved under a service that looks unchanged on the
+  wire); auto-computed after every scan.
 - FTS5-backed mini-DSL: `port:443 AND sans:*.corp.example.com`,
   `tech:nginx OR tech:apache`, `banner:OpenSSH*`, with the full
   grammar documented under [Query DSL](#query-dsl).
 - Web UI (FastAPI + HTMX, no JS framework, no build step): dashboard,
   hosts / services tables with filtering, pivot views
-  (cert / favicon / JA3S / JA4S / SSH host-key / SAN), operator-labelled
-  favicons, diff timeline + detail, DSL query box.
+  (cert / favicon / JA3S / JA4S / SSH host-key / SAN / stack signature /
+  boot-time cluster), operator-labelled favicons, diff timeline + detail,
+  DSL query box.
 - In-browser management (`/manage`): add/remove authorized ranges, edit
   scan + enrichment + retention settings, set the cloud-provider policy,
   label favicons, and launch a scan with live status — all sharing the same
@@ -126,16 +134,21 @@ query   := term (WS (AND|OR) WS term)*
 term    := NOT? key ':' value
 key     := banner | tech | sans | port | service | ip
          | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
+         | stack_sig | os_family | hop_count | clock_key
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
 - `banner`, `tech`, `sans` go through FTS5 when the wildcard is trailing
   (or absent); leading/interior wildcards fall back to SQL `LIKE`.
-- `port` and `favicon_mmh3` require integers and reject wildcards.
+- `port`, `favicon_mmh3` and `hop_count` require integers and reject
+  wildcards.
 - `cve:CVE-2023-1234` joins through the `vulns` table on
   `(scan_id, ip, port)`.
 - `hostkey:<sha256>` matches the server's default SSH host key — the
   "find every host presenting this key" / rogue-rebuild pivot.
+- `stack_sig`, `os_family` and `clock_key` accept wildcards, so
+  `stack_sig:128:*` groups every port whose SYN-ACK implies an initial TTL
+  of 128. These are populated only by the scapy discovery backend.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
@@ -147,6 +160,8 @@ tech:nginx OR tech:apache
 banner:OpenSSH* AND NOT service:http
 favicon_mmh3:-1234567890
 ip:10.0.0.*
+os_family:windows AND port:3389
+stack_sig:64:* AND NOT os_family:linux
 ```
 
 ## Workspace layout on disk

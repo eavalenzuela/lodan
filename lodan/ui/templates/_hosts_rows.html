@@ -5,8 +5,10 @@
     <td>{{ h.asn or "" }}</td>
     <td>{{ h.asn_org or "" }}</td>
     <td>{{ h.country or "" }}</td>
+    <td>{{ h.os_family or "" }}</td>
+    <td class="muted">{{ h.hop_count if h.hop_count is not none else "" }}</td>
     <td class="muted">{{ h.service_count }} svc</td>
   </tr>
 {% else %}
-  <tr><td colspan="6" class="muted">no hosts match</td></tr>
+  <tr><td colspan="8" class="muted">no hosts match</td></tr>
 {% endfor %}

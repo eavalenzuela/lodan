@@ -1,6 +1,6 @@
 """Compute and persist the delta between two scans.
 
-Five kinds of finding:
+Six kinds of finding:
 
 - new_service   (ip, port, proto) present in the newer scan, absent in the older.
 - gone_service  present in the older scan, absent in the newer.
@@ -9,6 +9,12 @@ Five kinds of finding:
                 scoped against *every* earlier scan in the same DB (not just the
                 compared-against one — "never seen before in this workspace").
 - new_host      IPs present in the newer scan, absent in the older.
+- path_changed  same (ip, port, proto) still answering, but the passive stack
+                fingerprint or the hop count moved. This is the topology
+                dimension the service-level kinds are blind to: an unchanged
+                banner served from a different OS stack, or the same host
+                suddenly a different number of hops away, means something
+                moved underneath a service that looks identical on the wire.
 
 Each finding lands in scan_diffs keyed by (from_scan_id, to_scan_id, kind, ip,
 port). A detail JSON blob carries the kind-specific fields so the UI can
@@ -21,7 +27,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-KINDS = ("new_service", "gone_service", "changed", "new_cert", "new_host")
+KINDS = (
+    "new_service", "gone_service", "changed", "new_cert", "new_host", "path_changed",
+)
 
 
 @dataclass(frozen=True)
@@ -31,11 +39,13 @@ class DiffCounts:
     changed: int = 0
     new_cert: int = 0
     new_host: int = 0
+    path_changed: int = 0
 
     @property
     def total(self) -> int:
         return (
-            self.new_service + self.gone_service + self.changed + self.new_cert + self.new_host
+            self.new_service + self.gone_service + self.changed + self.new_cert
+            + self.new_host + self.path_changed
         )
 
     def as_dict(self) -> dict[str, int]:
@@ -45,6 +55,7 @@ class DiffCounts:
             "changed": self.changed,
             "new_cert": self.new_cert,
             "new_host": self.new_host,
+            "path_changed": self.path_changed,
             "total": self.total,
         }
 
@@ -76,6 +87,7 @@ def compute_and_store(
         changed=_insert_changed(conn, from_scan_id, to_scan_id),
         new_cert=_insert_new_certs(conn, from_scan_id, to_scan_id),
         new_host=_insert_new_hosts(conn, from_scan_id, to_scan_id),
+        path_changed=_insert_path_changed(conn, from_scan_id, to_scan_id),
     )
     return counts
 
@@ -191,6 +203,48 @@ def _insert_new_certs(conn: sqlite3.Connection, f: int, t: int) -> int:
     return _insert_diff_rows(
         conn, f, t, "new_cert",
         [(ip, port, {"cert_fingerprint": fp}) for ip, port, fp in rows],
+    )
+
+
+def _insert_path_changed(conn: sqlite3.Connection, f: int, t: int) -> int:
+    """Stack fingerprint or hop count moved on a service present in both scans.
+
+    Both sides must be non-NULL: the masscan and naabu backends never populate
+    these columns, so a NULL is "not observed", not "changed". Comparing
+    against NULL would make every scan that switched backends look like the
+    whole estate moved.
+    """
+    rows = conn.execute(
+        """
+        SELECT a.ip, a.port, a.proto,
+               a.stack_sig, b.stack_sig,
+               a.os_family, b.os_family,
+               a.hop_count, b.hop_count
+        FROM services a
+        JOIN services b USING (ip, port, proto)
+        WHERE a.scan_id = ? AND b.scan_id = ?
+          AND ((a.stack_sig IS NOT NULL AND b.stack_sig IS NOT NULL
+                AND a.stack_sig != b.stack_sig)
+            OR (a.hop_count IS NOT NULL AND b.hop_count IS NOT NULL
+                AND a.hop_count != b.hop_count))
+        """,
+        (f, t),
+    ).fetchall()
+    return _insert_diff_rows(
+        conn, f, t, "path_changed",
+        [
+            (
+                ip, port,
+                {
+                    "proto": proto,
+                    "stack_sig": {"from": sig_from, "to": sig_to},
+                    "os_family": {"from": os_from, "to": os_to},
+                    "hop_count": {"from": hop_from, "to": hop_to},
+                },
+            )
+            for (ip, port, proto, sig_from, sig_to, os_from, os_to,
+                 hop_from, hop_to) in rows
+        ],
     )
 
 

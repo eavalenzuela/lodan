@@ -28,16 +28,36 @@ _SERVICES_COLUMN_MIGRATIONS = (
     ("ja4", "TEXT"),
     ("ja4s", "TEXT"),
     ("ssh_hostkey", "TEXT"),
+    ("stack_sig", "TEXT"),
+    ("os_family", "TEXT"),
+    ("os_confidence", "REAL"),
+    ("hop_count", "INTEGER"),
+    ("clock_key", "TEXT"),
+)
+
+# Same idea for `hosts`, which gained the host-level stack consensus columns.
+_HOSTS_COLUMN_MIGRATIONS = (
+    ("stack_sig", "TEXT"),
+    ("os_family", "TEXT"),
+    ("os_confidence", "REAL"),
+    ("hop_count", "INTEGER"),
 )
 
 
-def _migrate_services_columns(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(services)")}
+def _migrate_columns(
+    conn: sqlite3.Connection, table: str, migrations: tuple[tuple[str, str], ...]
+) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     if not existing:
-        return  # fresh DB — schema.sql creates `services` with every column
-    for name, col_type in _SERVICES_COLUMN_MIGRATIONS:
+        return  # fresh DB — schema.sql creates the table with every column
+    for name, col_type in migrations:
         if name not in existing:
-            conn.execute(f"ALTER TABLE services ADD COLUMN {name} {col_type}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {col_type}")
+
+
+def _migrate_services_columns(conn: sqlite3.Connection) -> None:
+    _migrate_columns(conn, "services", _SERVICES_COLUMN_MIGRATIONS)
+    _migrate_columns(conn, "hosts", _HOSTS_COLUMN_MIGRATIONS)
 
 
 # Single-column pivot indexes superseded by the partial composite ones in
