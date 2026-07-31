@@ -20,9 +20,18 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any, TextIO
 
-_TABLES = ("scans", "hosts", "services", "vulns", "authz_ledger", "findings")
+_TABLES = (
+    "scans", "hosts", "services", "vulns", "authz_ledger", "findings", "chain_certs",
+)
 _JSON_COLUMNS: dict[str, set[str]] = {
     "services": {"cert_sans", "tech", "raw"},
+}
+# Binary columns dropped from the export: JSON Lines has no representation for
+# raw DER, and base64-inflating every cert would bloat a workspace dump for a
+# field nothing downstream reads. The parsed metadata beside it is retained,
+# and the DER stays in the workspace DB for offline key analysis.
+_BINARY_COLUMNS: dict[str, set[str]] = {
+    "chain_certs": {"der"},
 }
 
 
@@ -47,10 +56,13 @@ def _iter_table(
     col_names = [d[0] for d in cursor.description]
     scan_col = _scan_column_for(table)
     json_cols = _JSON_COLUMNS.get(table, set())
+    binary_cols = _BINARY_COLUMNS.get(table, set())
     for row in cursor:
         record = dict(zip(col_names, row, strict=True))
         if scan_id is not None and scan_col and record.get(scan_col) != scan_id:
             continue
+        for col in binary_cols:
+            record.pop(col, None)
         for col in json_cols:
             value = record.get(col)
             if isinstance(value, str):

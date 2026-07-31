@@ -177,8 +177,38 @@ _SIGNATURE_ALGORITHMS: list[int] = [
 _ALPN_PROTOCOLS: list[bytes] = [b"h2", b"http/1.1"]
 
 
-def build_client_hello() -> ClientHelloBytes:
-    """Assemble a stable ClientHello. JA3 components are deterministic."""
+@dataclass(frozen=True)
+class HelloSpec:
+    """A parameterization of the ClientHello builder.
+
+    The default instance reproduces lodan's original fixed hello **byte for
+    byte** — JA3 is a function of these fields, so the no-argument path must
+    keep producing the same fingerprint it always has. Variants exist so the
+    acceptance matrix and JARM can ask targeted questions ("do you still speak
+    TLS 1.0?", "will you take 3DES?") with the same machinery.
+    """
+
+    name: str = "default"
+    legacy_version: int = 0x0303
+    record_version: int = 0x0301
+    ciphers: tuple[int, ...] = tuple(_CIPHERS)
+    groups: tuple[int, ...] = tuple(_SUPPORTED_GROUPS)
+    sig_algs: tuple[int, ...] = tuple(_SIGNATURE_ALGORITHMS)
+    alpn: tuple[bytes, ...] = tuple(_ALPN_PROTOCOLS)
+    supported_versions: tuple[int, ...] = (0x0303,)
+    # TLS 1.0/1.1 predate RFC 8446's supported_versions; a server that only
+    # speaks them negotiates off legacy_version and may choke on the extension.
+    # Omitting it is what makes a genuine "do you still accept TLS 1.0?" probe.
+    include_supported_versions: bool = True
+    server_name: str | None = None
+
+
+DEFAULT_HELLO = HelloSpec()
+
+
+def build_client_hello(spec: HelloSpec | None = None) -> ClientHelloBytes:
+    """Assemble a ClientHello. JA3 components are deterministic per spec."""
+    spec = spec or DEFAULT_HELLO
     random_bytes = secrets.token_bytes(32)
 
     extensions_in_order: list[int] = []
@@ -191,42 +221,64 @@ def build_client_hello() -> ClientHelloBytes:
 
     # The extension order below is what downstream JA3 implementations see.
     # Rewrite with care; the MD5 is a function of this list.
+    if spec.server_name:
+        add(EXT_SERVER_NAME, _encode_server_name(spec.server_name))
     add(EXT_EXTENDED_MASTER_SECRET, b"")
     add(EXT_RENEGOTIATION_INFO, b"\x00")
-    add(EXT_SUPPORTED_GROUPS, _encode_u16_list_with_len(_SUPPORTED_GROUPS))
+    add(EXT_SUPPORTED_GROUPS, _encode_u16_list_with_len(list(spec.groups)))
     add(EXT_EC_POINT_FORMATS, _encode_u8_list_with_len(_EC_POINT_FORMATS))
     add(EXT_SESSION_TICKET, b"")
-    add(EXT_SIGNATURE_ALGORITHMS, _encode_u16_list_with_len(_SIGNATURE_ALGORITHMS))
-    add(EXT_ALPN, _encode_alpn(_ALPN_PROTOCOLS))
-    # We advertise only TLS 1.2 in supported_versions so the server negotiates
-    # 1.2 and leaves the rest of the handshake in plaintext, where we can see
-    # the Certificate message.
-    add(EXT_SUPPORTED_VERSIONS, _encode_u8_list_with_len([0x03, 0x03]))
+    add(EXT_SIGNATURE_ALGORITHMS, _encode_u16_list_with_len(list(spec.sig_algs)))
+    if spec.alpn:
+        add(EXT_ALPN, _encode_alpn(list(spec.alpn)))
+    # With the default spec we advertise only TLS 1.2 here, so the server
+    # negotiates 1.2 and leaves the rest of the handshake in plaintext, where
+    # we can see the Certificate message.
+    if spec.include_supported_versions:
+        add(
+            EXT_SUPPORTED_VERSIONS,
+            _encode_u8_list_with_len(_u16_pairs(spec.supported_versions)),
+        )
 
     ch_body = b"".join([
-        struct.pack(">H", 0x0303),                         # legacy_version = TLS 1.2
+        struct.pack(">H", spec.legacy_version),
         random_bytes,
         b"\x00",                                           # session_id length = 0
-        _encode_u16_list_with_len(_CIPHERS),
+        _encode_u16_list_with_len(list(spec.ciphers)),
         b"\x01\x00",                                       # compression methods: [null]
         struct.pack(">H", len(ext_body)),
         ext_body,
     ])
     handshake = struct.pack(">B", HS_CLIENT_HELLO) + _u24(len(ch_body)) + ch_body
-    record = struct.pack(">BHH", TLS_CT_HANDSHAKE, 0x0301, len(handshake)) + handshake
+    record = (
+        struct.pack(">BHH", TLS_CT_HANDSHAKE, spec.record_version, len(handshake))
+        + handshake
+    )
 
     return ClientHelloBytes(
         record=record,
-        version=0x0303,
-        ciphers=_CIPHERS.copy(),
+        version=spec.legacy_version,
+        ciphers=list(spec.ciphers),
         extensions=extensions_in_order,
-        groups=_SUPPORTED_GROUPS.copy(),
+        groups=list(spec.groups),
         point_formats=_EC_POINT_FORMATS.copy(),
-        sig_algs=_SIGNATURE_ALGORITHMS.copy(),
-        alpn=[p for p in _ALPN_PROTOCOLS],
-        supported_versions=[0x0303],
+        sig_algs=list(spec.sig_algs),
+        alpn=list(spec.alpn),
+        supported_versions=(
+            list(spec.supported_versions)
+            if spec.include_supported_versions
+            else [spec.legacy_version]
+        ),
         has_sni=EXT_SERVER_NAME in extensions_in_order,
     )
+
+
+def _u16_pairs(versions: tuple[int, ...]) -> list[int]:
+    """Flatten uint16 versions into the byte list supported_versions wants."""
+    out: list[int] = []
+    for v in versions:
+        out.extend(((v >> 8) & 0xFF, v & 0xFF))
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -569,3 +621,10 @@ def _encode_u8_list_with_len(values: list[int]) -> bytes:
 def _encode_alpn(protocols: list[bytes]) -> bytes:
     body = b"".join(struct.pack(">B", len(p)) + p for p in protocols)
     return struct.pack(">H", len(body)) + body
+
+
+def _encode_server_name(host: str) -> bytes:
+    """RFC 6066 server_name extension body, host_name type only."""
+    name = host.encode("idna") if not host.isascii() else host.encode("ascii")
+    entry = struct.pack(">BH", 0, len(name)) + name
+    return struct.pack(">H", len(entry)) + entry

@@ -26,6 +26,10 @@ class ProbeBudget:
     per_host_concurrency: int = 4
     timeout_s: float = 5.0
     retries: int = 1
+    #: Extra TLS posture passes. Applied to the TLS probe instance before it
+    #: runs; every other probe ignores them.
+    tls_matrix: bool = True
+    jarm: bool = False
 
 
 async def run_probes(
@@ -43,6 +47,11 @@ async def run_probes(
     for ip, port, proto in tuples:
         probes = pick_probes(port, proto)
         for probe in probes:
+            # The TLS probe carries its posture switches as instance
+            # attributes; the registry hands back a fresh instance per port.
+            if getattr(probe, "name", None) == "tls":
+                probe.do_matrix = budget.tls_matrix
+                probe.do_jarm = budget.jarm
             tasks.append(
                 asyncio.create_task(
                     _run_one(conn, handle, probe, ip, port, proto, sem_global, sem_per_host, budget)

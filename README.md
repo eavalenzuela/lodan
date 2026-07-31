@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 648+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 719+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -39,6 +39,14 @@ end-to-end:
   passive stack fingerprint, banners and operator favicon labels into a
   `device_type` — server, router/firewall, printer, NAS, IP camera/IoT,
   hypervisor, container host. Unmatched stays NULL rather than guessing.
+- TLS posture deep-dive: every certificate in the chain is parsed and stored
+  (subject/issuer/serial, key type + bits, signature hash, CA flag, DER) with
+  hygiene verdicts — expired, expiring, not-yet-valid, self-signed, broken
+  chain order, RSA<2048, SHA1/MD5. A six-hello acceptance matrix answers what
+  the pinned-TLS-1.2 probe structurally cannot: which protocol versions are
+  still enabled, whether weak ciphers (3DES/RC4/NULL/export/anon) are on the
+  menu, and whether static-RSA key exchange is accepted. Optional JARM
+  fingerprinting (`[scan] jarm = true`) clusters servers by TLS configuration.
 - NAT / load-balancer detection: when one address's per-port fingerprints
   disagree in ways a single host cannot produce (two OS stacks, two SSH host
   keys), it's flagged with a `min_backend_count` floor. Differing JA3S or
@@ -149,6 +157,7 @@ key     := banner | tech | sans | port | service | ip
          | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
          | stack_sig | os_family | hop_count | clock_key
          | os_guess | device_type | nat_suspected | min_backend_count
+         | jarm | chain_cert | chain_issuer
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -170,6 +179,11 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
   `hosts`. `min_backend_count` matches **at least** N, since the stored value
   is a floor — identical machines behind a VIP are indistinguishable and
   honestly report 1.
+- `chain_cert:<sha256>` and `chain_issuer:"CN=Corp Root"` reach **any** depth
+  of the certificate chain, so they answer the CA-reuse question ("every host
+  signed by this CA") that the leaf-only `cert_fingerprint` pivot cannot.
+- `jarm:<fingerprint>` clusters by TLS configuration; populated only when
+  `[scan] jarm = true`.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 

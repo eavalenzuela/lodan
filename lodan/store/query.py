@@ -8,6 +8,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
              | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
              | stack_sig | os_family | hop_count | clock_key
              | os_guess | device_type | nat_suspected | min_backend_count
+             | jarm | chain_cert | chain_issuer
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -37,6 +38,7 @@ _VALID_KEYS = {
     "cve",
     "stack_sig", "os_family", "hop_count", "clock_key",
     "os_guess", "device_type", "nat_suspected", "min_backend_count",
+    "jarm", "chain_cert", "chain_issuer",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -213,7 +215,25 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
             [value],
         )
 
-    if key in ("stack_sig", "os_family", "clock_key", "os_guess"):
+    if key in ("chain_cert", "chain_issuer"):
+        # Reaches intermediates and roots, which the leaf-only
+        # services.cert_fingerprint pivot cannot see — this is the CA-reuse
+        # clustering question ("everything signed by this CA").
+        column = "sha256" if key == "chain_cert" else "issuer"
+        if "*" in value:
+            return (
+                "(services.scan_id, services.ip, services.port) IN "
+                f"(SELECT scan_id, ip, port FROM chain_certs "
+                f"WHERE COALESCE({column},'') LIKE ?)",
+                [value.replace("*", "%")],
+            )
+        return (
+            "(services.scan_id, services.ip, services.port) IN "
+            f"(SELECT scan_id, ip, port FROM chain_certs WHERE {column} = ?)",
+            [value],
+        )
+
+    if key in ("stack_sig", "os_family", "clock_key", "os_guess", "jarm"):
         # stack_sig carries ':' separators, so a trailing wildcard ("64:*") is
         # the natural way to group every host sharing an initial TTL.
         if "*" in value:
@@ -271,7 +291,7 @@ SERVICE_COLUMNS = (
     "scan_id", "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3", "ja3s", "ja4", "ja4s",
     "ssh_hostkey", "favicon_mmh3", "tech",
-    "stack_sig", "os_family", "hop_count", "clock_key", "os_guess",
+    "stack_sig", "os_family", "hop_count", "clock_key", "os_guess", "jarm",
 )
 _VALID_COLS = set(SERVICE_COLUMNS)
 _SAFE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

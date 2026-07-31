@@ -40,6 +40,13 @@ class ScanBlock(BaseModel):
     per_host_concurrency: int = 4
     probe_timeout_s: float = 5.0
     retries: int = 1
+    # TLS posture passes. The acceptance matrix costs six extra ClientHellos
+    # per TLS port and answers the questions the pinned-1.2 probe structurally
+    # cannot ("is TLS 1.0 still on?"). JARM costs ten and is off by default —
+    # it is a clustering fingerprint, not a posture verdict, so it shouldn't
+    # multiply anyone's traffic unless they asked for it.
+    tls_matrix: bool = True
+    jarm: bool = False
 
 
 class EnrichBlock(BaseModel):

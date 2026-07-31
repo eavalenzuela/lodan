@@ -34,7 +34,7 @@ from typing import Any
 _SERVICE_COLS = (
     "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3s", "ja4s", "ssh_hostkey", "tech",
-    "stack_sig", "os_family", "hop_count", "os_guess",
+    "stack_sig", "os_family", "hop_count", "os_guess", "jarm",
 )
 _HOST_COLS = (
     "ip", "rdns", "asn", "asn_org", "country", "os_family", "os_guess",

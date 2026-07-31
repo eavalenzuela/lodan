@@ -6,6 +6,7 @@ wraps them in `asyncio.to_thread` when it needs to.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -223,6 +224,7 @@ def update_service_from_probe(
             ssh_hostkey = COALESCE(?, ssh_hostkey),
             favicon_mmh3 = COALESCE(?, favicon_mmh3),
             tech = COALESCE(?, tech),
+            jarm = COALESCE(?, jarm),
             raw = COALESCE(?, raw)
         WHERE scan_id = ? AND ip = ? AND port = ? AND proto = ?
         """,
@@ -238,6 +240,7 @@ def update_service_from_probe(
             result.ssh_hostkey,
             result.favicon_mmh3,
             normalize.tech_json(result.tech),
+            result.jarm,
             result.raw_json() if result.raw else None,
             handle.scan_id,
             ip,
@@ -245,6 +248,56 @@ def update_service_from_probe(
             proto,
         ),
     )
+    if result.chain_der:
+        record_chain_certs(conn, handle, ip, port, result)
+
+
+def record_chain_certs(
+    conn: sqlite3.Connection,
+    handle: ScanHandle,
+    ip: str,
+    port: int,
+    result: ProbeResult,  # noqa: F821 — forward ref to avoid cycle
+) -> int:
+    """Persist every cert in the server's chain, DER included.
+
+    The parsed metadata already rides along in `raw['chain']`; this table
+    exists so the *key material* is queryable and available offline, and so a
+    CA-reuse pivot can reach intermediates that the leaf-only
+    `services.cert_fingerprint` column cannot see.
+    """
+    chain_der = result.chain_der or []
+    parsed = result.raw.get("chain") if isinstance(result.raw, dict) else None
+    parsed_by_pos = {}
+    if isinstance(parsed, list):
+        parsed_by_pos = {
+            entry.get("position"): entry
+            for entry in parsed
+            if isinstance(entry, dict)
+        }
+    rows = []
+    for position, der in enumerate(chain_der):
+        meta = parsed_by_pos.get(position, {})
+        rows.append((
+            handle.scan_id, ip, port, position,
+            meta.get("sha256") or hashlib.sha256(der).hexdigest(),
+            meta.get("subject"), meta.get("issuer"), meta.get("serial"),
+            meta.get("key_type"), meta.get("key_bits"), meta.get("curve"),
+            meta.get("sig_algo"), meta.get("not_before"), meta.get("not_after"),
+            None if meta.get("is_ca") is None else int(bool(meta.get("is_ca"))),
+            int(bool(meta.get("self_signed"))),
+            der,
+        ))
+    if not rows:
+        return 0
+    conn.executemany(
+        "INSERT OR REPLACE INTO chain_certs "
+        "(scan_id, ip, port, position, sha256, subject, issuer, serial, key_type, "
+        " key_bits, curve, sig_algo, not_before, not_after, is_ca, self_signed, der) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
 
 
 def record_favicons(conn: sqlite3.Connection, handle: ScanHandle) -> int:

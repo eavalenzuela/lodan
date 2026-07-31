@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+from dataclasses import replace
 from typing import Any
 
 from cryptography import x509
@@ -25,6 +26,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import ExtensionOID
 
 from lodan.probes.base import ProbeResult
+from lodan.probes.cert_chain import parse_chain_full
+from lodan.probes.tls_matrix import run_jarm, run_matrix
 from lodan.probes.tls_parser import (
     ClientHelloBytes,
     build_client_hello,
@@ -50,9 +53,35 @@ class TLSProbe:
     name = "tls"
     default_ports = _DEFAULT_TLS_PORTS
 
+    #: Extra posture passes, set by the probe runner from config. Both are
+    #: opt-in-shaped: the matrix adds six connections per TLS port and JARM
+    #: adds ten, so neither multiplies an operator's traffic without them
+    #: having asked for it.
+    do_matrix: bool = True
+    do_jarm: bool = False
+
     async def probe(self, ip: str, port: int, timeout: float) -> ProbeResult:
         ch, raw = await asyncio.wait_for(fetch(ip, port, timeout), timeout=timeout + 1)
-        return parse_stream(ch, raw)
+        result = parse_stream(ch, raw, ip=ip)
+        if not (self.do_matrix or self.do_jarm):
+            return result
+
+        extra: dict[str, Any] = {}
+        jarm: str | None = None
+        if self.do_matrix:
+            with contextlib.suppress(Exception):
+                matrix = await run_matrix(ip, port, timeout)
+                extra["tls_matrix"] = matrix.as_dict()
+        if self.do_jarm:
+            with contextlib.suppress(Exception):
+                jarm, _outcomes = await run_jarm(ip, port, timeout)
+                if jarm:
+                    extra["jarm"] = jarm
+        if not extra:
+            return result
+        merged = dict(result.raw or {})
+        merged.update(extra)
+        return replace(result, raw=merged, jarm=jarm or result.jarm)
 
 
 async def fetch(ip: str, port: int, timeout: float) -> tuple[ClientHelloBytes, bytes]:
@@ -96,7 +125,7 @@ def _has_finished_marker(raw: bytes) -> bool:
     return 14 in kinds
 
 
-def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
+def parse_stream(ch: ClientHelloBytes, raw: bytes, *, ip: str | None = None) -> ProbeResult:
     messages = collect_handshake_messages(raw)
     sh_body = find_server_hello(messages)
     if sh_body is None:
@@ -191,6 +220,13 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
             "cert_not_valid_before": not_before,
             "cert_not_valid_after": not_after,
         })
+    if chain:
+        # Every cert the server volunteered, not just the leaf — intermediates
+        # carry their own key sizes and signature algorithms, and the chain's
+        # shape is itself a hygiene signal.
+        parsed_chain = parse_chain_full(chain, ip=ip)
+        raw_fields["chain"] = [c.as_dict() for c in parsed_chain.certs]
+        raw_fields["chain_hygiene"] = parsed_chain.hygiene.as_dict()
 
     return ProbeResult(
         service="tls",
@@ -202,6 +238,7 @@ def parse_stream(ch: ClientHelloBytes, raw: bytes) -> ProbeResult:
         ja4=ch.ja4,
         ja4s=sh.ja4s,
         raw=raw_fields,
+        chain_der=list(chain) or None,
     )
 
 

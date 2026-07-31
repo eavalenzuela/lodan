@@ -71,8 +71,42 @@ CREATE TABLE IF NOT EXISTS services (
   hop_count INTEGER,
   clock_key TEXT,                 -- bucketed boot-time estimate from TSval
   os_guess TEXT,                  -- distro/OS mined from this service's version string
+  jarm TEXT,                      -- JARM TLS-configuration fingerprint
   PRIMARY KEY (scan_id, ip, port, proto)
 );
+
+-- Every certificate the server presented, not just the leaf. `der` is kept so
+-- offline key analysis (modulus size, ROCA) can run without reconnecting;
+-- `position` 0 is the leaf, ascending toward the root. Cascade-deleted with
+-- the scan like the other per-scan derived tables.
+CREATE TABLE IF NOT EXISTS chain_certs (
+  scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+  ip TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  position INTEGER NOT NULL,      -- 0 = leaf
+  sha256 TEXT NOT NULL,
+  subject TEXT,
+  issuer TEXT,
+  serial TEXT,
+  key_type TEXT,
+  key_bits INTEGER,
+  curve TEXT,
+  sig_algo TEXT,
+  not_before TEXT,
+  not_after TEXT,
+  is_ca INTEGER,
+  self_signed INTEGER,
+  der BLOB,
+  PRIMARY KEY (scan_id, ip, port, position)
+);
+
+-- CA-reuse clustering: "every host presenting a cert anywhere in its chain
+-- with this fingerprint", which the leaf-only services.cert_fingerprint
+-- pivot cannot answer.
+CREATE INDEX IF NOT EXISTS chain_certs_sha256
+  ON chain_certs(sha256, scan_id DESC, ip, port);
+CREATE INDEX IF NOT EXISTS chain_certs_issuer
+  ON chain_certs(issuer) WHERE issuer IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS services_ip_port ON services(ip, port);
 
@@ -112,6 +146,8 @@ CREATE INDEX IF NOT EXISTS services_pivot_stack_sig
   ON services(stack_sig, scan_id DESC, ip, port) WHERE stack_sig IS NOT NULL;
 CREATE INDEX IF NOT EXISTS services_pivot_clock_key
   ON services(clock_key, scan_id DESC, ip, port) WHERE clock_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS services_pivot_jarm
+  ON services(jarm, scan_id DESC, ip, port) WHERE jarm IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS vulns (
   scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,

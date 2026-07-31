@@ -184,6 +184,8 @@ async def run_scan(
                         per_host_concurrency=cfg.scan.per_host_concurrency,
                         timeout_s=cfg.scan.probe_timeout_s,
                         retries=cfg.scan.retries,
+                        tls_matrix=cfg.scan.tls_matrix,
+                        jarm=cfg.scan.jarm,
                     ),
                 )
                 alog.event("probes_completed", services_probed=summary.services_probed)

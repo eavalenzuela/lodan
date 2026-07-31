@@ -34,6 +34,7 @@ _SERVICES_COLUMN_MIGRATIONS = (
     ("hop_count", "INTEGER"),
     ("clock_key", "TEXT"),
     ("os_guess", "TEXT"),
+    ("jarm", "TEXT"),
 )
 
 # Same idea for `hosts`, which gained the host-level stack consensus and the

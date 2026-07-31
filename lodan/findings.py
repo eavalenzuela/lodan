@@ -12,7 +12,10 @@ Categories, roughly by what they flag:
 - no-tls            a protocol that offered no STARTTLS/SSL upgrade (smtp, ftp, db, ...)
 - unauth-service    a data/management service reachable without authentication
 - tls-cert          certificate problems (expired, expiring soon, self-signed)
-- tls-version       a deprecated TLS protocol version negotiated
+- tls-version       a deprecated TLS protocol version negotiated or accepted
+- tls-chain         chain-shape problems (out of order, no issuing chain)
+- weak-crypto       weak keys, deprecated signature hashes, weak accepted
+                    ciphers, or key exchange without forward secrecy
 """
 from __future__ import annotations
 
@@ -132,7 +135,71 @@ def _tls_findings(row: ServiceRow, now: datetime) -> list[Finding]:
     return out
 
 
-_DETECTORS = (_cleartext_admin, _no_tls, _unauth_service, _tls_findings)
+def _chain_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Hygiene verdicts over the full certificate chain.
+
+    Complements `_tls_findings`, which only ever saw the leaf. Note the
+    deliberate omission: `san_mismatch` is computed and stored but never
+    surfaced here — lodan dials by IP, so a name-based cert legitimately fails
+    to cover the address, and reporting it would fire on almost every host.
+    """
+    hygiene = row.raw.get("chain_hygiene")
+    if not isinstance(hygiene, dict):
+        return []
+    out: list[Finding] = []
+    chain = row.raw.get("chain")
+    depth = len(chain) if isinstance(chain, list) else None
+
+    if hygiene.get("not_yet_valid"):
+        out.append(Finding("tls-cert", "medium", "TLS certificate is not yet valid.",
+                           {"chain_depth": depth}))
+    if hygiene.get("out_of_order"):
+        out.append(Finding("tls-chain", "low",
+                           "TLS certificate chain is out of order or broken.",
+                           {"chain_depth": depth}))
+    if hygiene.get("incomplete_chain"):
+        out.append(Finding("tls-chain", "low",
+                           "Server sent a leaf certificate with no issuing chain.",
+                           {"chain_depth": depth}))
+    for reason in hygiene.get("weak_key") or ():
+        out.append(Finding("weak-crypto", "high",
+                           f"Weak certificate key: {reason}.", {"detail": reason}))
+    for reason in hygiene.get("weak_signature") or ():
+        out.append(Finding("weak-crypto", "medium",
+                           f"Deprecated certificate signature hash: {reason}.",
+                           {"detail": reason}))
+    return out
+
+
+def _tls_matrix_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Posture verdicts from the protocol/cipher acceptance matrix."""
+    matrix = row.raw.get("tls_matrix")
+    if not isinstance(matrix, dict):
+        return []
+    out: list[Finding] = []
+    for label in matrix.get("accepted_versions") or ():
+        if label in ("TLS 1.0", "TLS 1.1"):
+            out.append(Finding("tls-version", "medium",
+                               f"Server still accepts deprecated {label}.",
+                               {"version": label}))
+    weak = matrix.get("weak_cipher")
+    if weak:
+        families = matrix.get("weak_families") or []
+        severity = "high" if {"null", "export", "anon"} & set(families) else "medium"
+        out.append(Finding("weak-crypto", severity,
+                           f"Server accepts weak cipher suite {weak}.",
+                           {"cipher": weak, "families": families}))
+    if matrix.get("accepts_static_rsa"):
+        out.append(Finding("weak-crypto", "low",
+                           "Server accepts static-RSA key exchange (no forward secrecy).",
+                           {}))
+    return out
+
+
+_DETECTORS = (
+    _cleartext_admin, _no_tls, _unauth_service, _tls_findings,
+    _chain_findings, _tls_matrix_findings,
+)
 
 
 def _parse_dt(value: Any) -> datetime | None:

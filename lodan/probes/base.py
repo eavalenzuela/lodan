@@ -24,7 +24,13 @@ class ProbeResult:
     ssh_hostkey: str | None = None
     favicon_mmh3: int | None = None
     tech: list[str] | None = None
+    jarm: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    #: DER bytes of every cert in the server's chain, leaf first. Kept off
+    #: `raw` because that is JSON-serialized at the storage boundary and this
+    #: is binary; the writer persists it to `chain_certs` so offline key
+    #: analysis can run over the real key material without reconnecting.
+    chain_der: list[bytes] | None = None
 
     def raw_json(self) -> str:
         return json.dumps(self.raw, default=str, sort_keys=True)
