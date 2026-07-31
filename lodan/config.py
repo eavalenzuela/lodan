@@ -49,6 +49,7 @@ class EnrichBlock(BaseModel):
     cve: bool = True
     favicon: bool = True
     tech: bool = True
+    device: bool = True
     keep_raw: bool = False
 
 

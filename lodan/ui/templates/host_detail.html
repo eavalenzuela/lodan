@@ -7,8 +7,14 @@
     {% if host.asn %}<li><span class="label">ASN</span><span class="value">AS{{ host.asn }}</span></li>{% endif %}
     {% if host.asn_org %}<li><span class="label">org</span><span class="value">{{ host.asn_org }}</span></li>{% endif %}
     {% if host.country %}<li><span class="label">country</span><span class="value">{{ host.country }}</span></li>{% endif %}
+    {% if host.os_guess %}
+      <li><span class="label">os</span><span class="value">{{ host.os_guess }}</span></li>
+    {% endif %}
     {% if host.os_family %}
-      <li><span class="label">os</span><span class="value">{{ host.os_family }}{% if host.os_confidence %} <small class="muted">({{ "%.0f" | format(host.os_confidence * 100) }}%)</small>{% endif %}</span></li>
+      <li><span class="label">stack os</span><span class="value">{{ host.os_family }}{% if host.os_confidence %} <small class="muted">({{ "%.0f" | format(host.os_confidence * 100) }}%)</small>{% endif %}</span></li>
+    {% endif %}
+    {% if host.device_type %}
+      <li><span class="label">device</span><span class="value">{{ host.device_type }}{% if host.device_confidence %} <small class="muted">({{ "%.0f" | format(host.device_confidence * 100) }}%)</small>{% endif %}</span></li>
     {% endif %}
     {% if host.hop_count is not none %}<li><span class="label">hops</span><span class="value">{{ host.hop_count }}</span></li>{% endif %}
     {% if host.stack_sig %}

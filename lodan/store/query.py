@@ -7,6 +7,7 @@ Grammar (all case-insensitive operators; bare tokens and quoted values):
     key     := banner | tech | sans | port | service | ip
              | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
              | stack_sig | os_family | hop_count | clock_key
+             | os_guess | device_type
     value   := bareword | '"' quoted '"' (may contain * as a wildcard)
 
 Compiles to a parameterized SQL WHERE clause over the services table,
@@ -35,6 +36,7 @@ _VALID_KEYS = {
     "favicon_mmh3", "ja3", "ja3s", "ja4", "ja4s", "hostkey",
     "cve",
     "stack_sig", "os_family", "hop_count", "clock_key",
+    "os_guess", "device_type",
 }
 _FTS_KEYS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
 _LIKE_COLUMNS = {"banner": "banner", "tech": "tech", "sans": "cert_sans"}
@@ -171,7 +173,22 @@ def _emit_positive(key: str, value: str) -> tuple[str, list[Any]]:
     if key == "hostkey":
         return ("services.ssh_hostkey = ?", [value])
 
-    if key in ("stack_sig", "os_family", "clock_key"):
+    if key == "device_type":
+        # device_type is a host-level verdict, so this joins out to `hosts`
+        # the same way `cve` joins out to `vulns`.
+        if "*" in value:
+            return (
+                "(services.scan_id, services.ip) IN "
+                "(SELECT scan_id, ip FROM hosts WHERE COALESCE(device_type,'') LIKE ?)",
+                [value.replace("*", "%")],
+            )
+        return (
+            "(services.scan_id, services.ip) IN "
+            "(SELECT scan_id, ip FROM hosts WHERE device_type = ?)",
+            [value],
+        )
+
+    if key in ("stack_sig", "os_family", "clock_key", "os_guess"):
         # stack_sig carries ':' separators, so a trailing wildcard ("64:*") is
         # the natural way to group every host sharing an initial TTL.
         if "*" in value:
@@ -229,7 +246,7 @@ SERVICE_COLUMNS = (
     "scan_id", "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3", "ja3s", "ja4", "ja4s",
     "ssh_hostkey", "favicon_mmh3", "tech",
-    "stack_sig", "os_family", "hop_count", "clock_key",
+    "stack_sig", "os_family", "hop_count", "clock_key", "os_guess",
 )
 _VALID_COLS = set(SERVICE_COLUMNS)
 _SAFE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

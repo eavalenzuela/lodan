@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS hosts (
   os_family TEXT,
   os_confidence REAL,
   hop_count INTEGER,
+  -- Fused inference over the whole host feature vector (ports, stack, banners,
+  -- favicon labels). os_guess is the unanimous per-service distro reading.
+  os_guess TEXT,
+  device_type TEXT,               -- server | router-firewall | printer | nas
+                                  -- | ip-camera-iot | hypervisor | container-host
+  device_confidence REAL,
   PRIMARY KEY (scan_id, ip)
 );
 
@@ -58,6 +64,7 @@ CREATE TABLE IF NOT EXISTS services (
   os_confidence REAL,
   hop_count INTEGER,
   clock_key TEXT,                 -- bucketed boot-time estimate from TSval
+  os_guess TEXT,                  -- distro/OS mined from this service's version string
   PRIMARY KEY (scan_id, ip, port, proto)
 );
 

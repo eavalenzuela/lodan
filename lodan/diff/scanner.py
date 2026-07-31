@@ -4,7 +4,8 @@ Six kinds of finding:
 
 - new_service   (ip, port, proto) present in the newer scan, absent in the older.
 - gone_service  present in the older scan, absent in the newer.
-- changed       same (ip, port, proto) but banner / cert_fingerprint / tech differs.
+- changed       same (ip, port, proto) but banner / cert_fingerprint / tech /
+                os_guess differs.
 - new_cert      cert_fingerprint first seen in the newer scan for this workspace,
                 scoped against *every* earlier scan in the same DB (not just the
                 compared-against one — "never seen before in this workspace").
@@ -157,13 +158,15 @@ def _insert_changed(conn: sqlite3.Connection, f: int, t: int) -> int:
                a.service, b.service,
                a.banner, b.banner,
                a.cert_fingerprint, b.cert_fingerprint,
-               a.tech, b.tech
+               a.tech, b.tech,
+               a.os_guess, b.os_guess
         FROM services a
         JOIN services b USING (ip, port, proto)
         WHERE a.scan_id = ? AND b.scan_id = ?
           AND (COALESCE(a.banner,'') != COALESCE(b.banner,'')
             OR COALESCE(a.cert_fingerprint,'') != COALESCE(b.cert_fingerprint,'')
-            OR COALESCE(a.tech,'') != COALESCE(b.tech,''))
+            OR COALESCE(a.tech,'') != COALESCE(b.tech,'')
+            OR COALESCE(a.os_guess,'') != COALESCE(b.os_guess,''))
         """,
         (f, t),
     ).fetchall()
@@ -178,10 +181,11 @@ def _insert_changed(conn: sqlite3.Connection, f: int, t: int) -> int:
                     "banner": {"from": b_from, "to": b_to},
                     "cert_fingerprint": {"from": cf_from, "to": cf_to},
                     "tech": {"from": t_from, "to": t_to},
+                    "os_guess": {"from": og_from, "to": og_to},
                 },
             )
             for (ip, port, proto, s_from, s_to, b_from, b_to,
-                 cf_from, cf_to, t_from, t_to) in rows
+                 cf_from, cf_to, t_from, t_to, og_from, og_to) in rows
         ],
     )
 

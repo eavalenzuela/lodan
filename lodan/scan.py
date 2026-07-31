@@ -19,6 +19,7 @@ from lodan.discovery.dispatch import pick, register_defaults
 from lodan.discovery.ports import parse_ports
 from lodan.enrich import cve as cve_enrich
 from lodan.enrich import cve_data
+from lodan.enrich.device import enrich_devices
 from lodan.enrich.hosts import enrich_hosts
 from lodan.paths import workspace_config, workspace_db, workspace_scan_log
 from lodan.probes import dispatch as probe_dispatch
@@ -46,6 +47,7 @@ class ScanSummary:
         self.services_probed = 0
         self.hosts_fingerprinted = 0
         self.hosts_enriched = 0
+        self.devices_classified = 0
         self.vulns_matched = 0
         self.findings = 0
         self.diff_total = 0
@@ -194,11 +196,17 @@ async def run_scan(
                 summary.vulns_matched = _run_cve_enrichment(conn, handle.scan_id)
             if cfg.enrich.favicon:
                 writer.record_favicons(conn, handle)
-            if summary.hosts_enriched or cfg.enrich.cve:
+            if cfg.enrich.device:
+                # Last enrichment step: fuses probe banners, the passive stack
+                # fingerprint and the (just-recorded) favicon labels, so it
+                # needs every other enrichment to have landed first.
+                summary.devices_classified = enrich_devices(conn, handle.scan_id)
+            if summary.hosts_enriched or cfg.enrich.cve or summary.devices_classified:
                 alog.event(
                     "enrichment_completed",
                     hosts_enriched=summary.hosts_enriched,
                     vulns_matched=summary.vulns_matched,
+                    devices_classified=summary.devices_classified,
                 )
             summary.findings = findings.run_findings(conn, handle.scan_id)
             if summary.findings:

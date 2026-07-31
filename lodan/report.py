@@ -34,9 +34,12 @@ from typing import Any
 _SERVICE_COLS = (
     "ip", "port", "proto", "service", "banner",
     "cert_fingerprint", "cert_sans", "ja3s", "ja4s", "ssh_hostkey", "tech",
-    "stack_sig", "os_family", "hop_count",
+    "stack_sig", "os_family", "hop_count", "os_guess",
 )
-_HOST_COLS = ("ip", "rdns", "asn", "asn_org", "country", "os_family", "hop_count")
+_HOST_COLS = (
+    "ip", "rdns", "asn", "asn_org", "country", "os_family", "os_guess",
+    "device_type", "hop_count",
+)
 _VULN_COLS = ("ip", "port", "cve", "cpe", "confidence", "source")
 _FINDING_COLS = ("severity", "category", "ip", "port", "title")
 

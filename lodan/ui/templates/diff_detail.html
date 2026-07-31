@@ -40,7 +40,11 @@
                 {% endif %}
                 {% if d.tech.from != d.tech.to %}
                   tech: <del>{{ d.tech.from or "∅" }}</del> →
-                  <ins>{{ d.tech.to or "∅" }}</ins>
+                  <ins>{{ d.tech.to or "∅" }}</ins><br>
+                {% endif %}
+                {% if d.os_guess and d.os_guess.from != d.os_guess.to %}
+                  os: <del>{{ d.os_guess.from or "∅" }}</del> →
+                  <ins>{{ d.os_guess.to or "∅" }}</ins>
                 {% endif %}
               {% elif kind == "new_cert" %}
                 <a href="/pivot/cert/{{ d.cert_fingerprint }}">{{ d.cert_fingerprint | short_fp }}</a>

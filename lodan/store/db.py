@@ -33,14 +33,19 @@ _SERVICES_COLUMN_MIGRATIONS = (
     ("os_confidence", "REAL"),
     ("hop_count", "INTEGER"),
     ("clock_key", "TEXT"),
+    ("os_guess", "TEXT"),
 )
 
-# Same idea for `hosts`, which gained the host-level stack consensus columns.
+# Same idea for `hosts`, which gained the host-level stack consensus and the
+# fused device classification.
 _HOSTS_COLUMN_MIGRATIONS = (
     ("stack_sig", "TEXT"),
     ("os_family", "TEXT"),
     ("os_confidence", "REAL"),
     ("hop_count", "INTEGER"),
+    ("os_guess", "TEXT"),
+    ("device_type", "TEXT"),
+    ("device_confidence", "REAL"),
 )
 
 

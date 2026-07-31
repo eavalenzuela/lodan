@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 580+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 625+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -32,6 +32,13 @@ end-to-end:
   TCP-timestamp `clock_key` that clusters several IPs onto one physical
   machine. Only the scapy backend sees the raw packet; masscan and naabu
   leave every derived column NULL.
+- OS / distro / device-type inference by multi-signal fusion, all offline:
+  an OpenSSH banner comment plus its version pins the distro release
+  (`OpenSSH_8.2p1 Ubuntu-4ubuntu0.5` → Ubuntu 20.04), an IIS version implies
+  a Windows Server release, and a weighted rule table fuses the open-port set,
+  passive stack fingerprint, banners and operator favicon labels into a
+  `device_type` — server, router/firewall, printer, NAS, IP camera/IoT,
+  hypervisor, container host. Unmatched stays NULL rather than guessing.
 - Scan-to-scan diff: `new_service`, `gone_service`, `changed`,
   `new_cert` (workspace-scoped), `new_host`, `path_changed` (stack
   signature or hop count moved under a service that looks unchanged on the
@@ -135,6 +142,7 @@ term    := NOT? key ':' value
 key     := banner | tech | sans | port | service | ip
          | favicon_mmh3 | ja3 | ja3s | ja4 | ja4s | hostkey | cve
          | stack_sig | os_family | hop_count | clock_key
+         | os_guess | device_type
 value   := bareword | "quoted string" (may contain * as a wildcard)
 ```
 
@@ -149,6 +157,9 @@ value   := bareword | "quoted string" (may contain * as a wildcard)
 - `stack_sig`, `os_family` and `clock_key` accept wildcards, so
   `stack_sig:128:*` groups every port whose SYN-ACK implies an initial TTL
   of 128. These are populated only by the scapy discovery backend.
+- `os_guess:Ubuntu*` matches the distro mined from a service's version
+  string; `device_type:printer` joins through the `hosts` table on
+  `(scan_id, ip)` the way `cve` joins through `vulns`.
 - Operators are case-insensitive. AND binds tighter than OR; adjacent
   terms without an operator are implicit AND. No parentheses in v1.
 
@@ -162,6 +173,8 @@ favicon_mmh3:-1234567890
 ip:10.0.0.*
 os_family:windows AND port:3389
 stack_sig:64:* AND NOT os_family:linux
+device_type:printer OR device_type:ip-camera-iot
+os_guess:"Ubuntu 20.04" AND port:22
 ```
 
 ## Workspace layout on disk

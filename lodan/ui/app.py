@@ -615,7 +615,8 @@ def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dic
     so enrichment-skipped scans still render."""
     query = (
         "SELECT s.ip, h.rdns, h.asn, h.asn_org, h.country, "
-        "h.os_family, h.hop_count, COUNT(*) AS svc_count "
+        "COALESCE(h.os_guess, h.os_family), h.hop_count, h.device_type, "
+        "COUNT(*) AS svc_count "
         "FROM services s "
         "LEFT JOIN hosts h ON h.scan_id = s.scan_id AND h.ip = s.ip "
         "WHERE s.scan_id = ?"
@@ -624,19 +625,21 @@ def _hosts_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[dic
     if q:
         query += (
             " AND (s.ip LIKE ? OR COALESCE(h.rdns,'') LIKE ? "
-            "   OR COALESCE(h.asn_org,'') LIKE ? OR COALESCE(h.os_family,'') LIKE ?)"
+            "   OR COALESCE(h.asn_org,'') LIKE ? OR COALESCE(h.os_family,'') LIKE ?"
+            "   OR COALESCE(h.os_guess,'') LIKE ? OR COALESCE(h.device_type,'') LIKE ?)"
         )
         like = f"%{q}%"
-        params.extend([like, like, like, like])
+        params.extend([like] * 6)
     query += (
-        " GROUP BY s.ip, h.rdns, h.asn, h.asn_org, h.country, h.os_family, h.hop_count"
+        " GROUP BY s.ip, h.rdns, h.asn, h.asn_org, h.country, h.os_guess, h.os_family,"
+        " h.hop_count, h.device_type"
         " ORDER BY s.ip"
     )
     rows = db.execute(query, params).fetchall()
     return [
         {
             "ip": r[0], "rdns": r[1], "asn": r[2], "asn_org": r[3], "country": r[4],
-            "os_family": r[5], "hop_count": r[6], "service_count": r[7],
+            "os": r[5], "hop_count": r[6], "device_type": r[7], "service_count": r[8],
         }
         for r in rows
     ]
@@ -671,7 +674,8 @@ def _services_rows(db: sqlite3.Connection, scan_id: int, q: str | None) -> list[
 def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
     row = db.execute(
         "SELECT ip, rdns, asn, asn_org, country, stack_sig, os_family, os_confidence, "
-        "hop_count FROM hosts WHERE scan_id = ? AND ip = ?",
+        "hop_count, os_guess, device_type, device_confidence "
+        "FROM hosts WHERE scan_id = ? AND ip = ?",
         (scan_id, ip),
     ).fetchone()
     if row is not None:
@@ -679,7 +683,8 @@ def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
             "ip": row[0], "rdns": row[1], "asn": row[2],
             "asn_org": row[3], "country": row[4],
             "stack_sig": row[5], "os_family": row[6], "os_confidence": row[7],
-            "hop_count": row[8],
+            "hop_count": row[8], "os_guess": row[9], "device_type": row[10],
+            "device_confidence": row[11],
         }
     # Host might not have a row if enrichment was off; synthesize a minimal one
     # as long as the IP shows up in services.
@@ -690,7 +695,8 @@ def _host_row(db: sqlite3.Connection, scan_id: int, ip: str) -> dict | None:
         return {
             "ip": ip, "rdns": None, "asn": None, "asn_org": None, "country": None,
             "stack_sig": None, "os_family": None, "os_confidence": None,
-            "hop_count": None,
+            "hop_count": None, "os_guess": None, "device_type": None,
+            "device_confidence": None,
         }
     return None
 
