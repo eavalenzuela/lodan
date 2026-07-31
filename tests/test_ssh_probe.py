@@ -42,10 +42,22 @@ def test_parse_emits_probe_result() -> None:
     assert result.service == "ssh"
     assert "OpenSSH_9.3" in (result.banner or "")
     assert "1 host key" in (result.banner or "")
-    assert result.raw["host_keys"] == [{"algo": "ssh-ed25519", "sha256": "a" * 64}]
+    # `blob` carries the wire-format public key so offline key-strength
+    # analysis has the modulus a sha256 fingerprint throws away.
+    assert result.raw["host_keys"] == [
+        {"algo": "ssh-ed25519", "sha256": "a" * 64, "blob": ""}
+    ]
     assert result.raw["parsed"]["software"] == "OpenSSH_9.3"
     # The first (default) host key is promoted to the pivotable column.
     assert result.ssh_hostkey == "a" * 64
+
+
+def test_parse_retains_the_host_key_blob() -> None:
+    result = parse(
+        "SSH-2.0-OpenSSH_9.3",
+        host_keys=[("ssh-rsa", "a" * 64, "0011deadbeef")],
+    )
+    assert result.raw["host_keys"][0]["blob"] == "0011deadbeef"
 
 
 def test_parse_promotes_first_host_key() -> None:

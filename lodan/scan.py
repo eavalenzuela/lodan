@@ -21,6 +21,7 @@ from lodan.enrich import cve as cve_enrich
 from lodan.enrich import cve_data
 from lodan.enrich.device import enrich_devices
 from lodan.enrich.hosts import enrich_hosts
+from lodan.enrich.keyposture import enrich_key_posture
 from lodan.enrich.topology import enrich_topology
 from lodan.paths import workspace_config, workspace_db, workspace_scan_log
 from lodan.probes import dispatch as probe_dispatch
@@ -50,6 +51,7 @@ class ScanSummary:
         self.hosts_enriched = 0
         self.devices_classified = 0
         self.nat_suspected = 0
+        self.weak_keys = 0
         self.vulns_matched = 0
         self.findings = 0
         self.diff_total = 0
@@ -218,6 +220,15 @@ async def run_scan(
                     nat_suspected=summary.nat_suspected,
                 )
             summary.findings = findings.run_findings(conn, handle.scan_id)
+            if cfg.enrich.key_posture:
+                # Runs after run_findings because it writes its own findings
+                # rows directly (and a vulns row for ROCA), and run_findings
+                # clears the table for the scan.
+                weak_keys, roca = enrich_key_posture(conn, handle.scan_id)
+                summary.weak_keys = weak_keys
+                summary.findings += weak_keys + roca
+                if weak_keys or roca:
+                    alog.event("key_posture_scored", weak_keys=weak_keys, roca=roca)
             if summary.findings:
                 alog.event("findings_detected", findings=summary.findings)
             writer.finish_scan(conn, handle, status="completed")

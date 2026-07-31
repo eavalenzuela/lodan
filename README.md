@@ -8,7 +8,7 @@ See [PLAN.md](PLAN.md) for the full design and decision log.
 ## Status
 
 Feature-complete against PLAN.md's M1–M8 plus the JA3/JA3S and JA4/JA4S
-follow-ups (M9). 719+ tests, ruff-clean. The pieces below all work
+follow-ups (M9). 771+ tests, ruff-clean. The pieces below all work
 end-to-end:
 
 - Port discovery via masscan / naabu / scapy (auto-pick).
@@ -47,6 +47,13 @@ end-to-end:
   still enabled, whether weak ciphers (3DES/RC4/NULL/export/anon) are on the
   menu, and whether static-RSA key exchange is accepted. Optional JARM
   fingerprinting (`[scan] jarm = true`) clusters servers by TLS configuration.
+- SSH crypto posture: the server's `SSH_MSG_KEXINIT` — volunteered before any
+  authentication — is read and audited, so a modern version string no longer
+  hides `diffie-hellman-group1-sha1`, CBC ciphers, `hmac-md5` or `ssh-dss`
+  still being offered. Host-key material is retained alongside the
+  fingerprint, and every captured public key (TLS chain *and* SSH host key) is
+  scored offline for size, deprecated algorithms and the ROCA
+  (CVE-2017-15361) modulus fingerprint.
 - NAT / load-balancer detection: when one address's per-port fingerprints
   disagree in ways a single host cannot produce (two OS stacks, two SSH host
   keys), it's flagged with a `min_backend_count` floor. Differing JA3S or

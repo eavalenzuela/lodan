@@ -14,8 +14,12 @@ Categories, roughly by what they flag:
 - tls-cert          certificate problems (expired, expiring soon, self-signed)
 - tls-version       a deprecated TLS protocol version negotiated or accepted
 - tls-chain         chain-shape problems (out of order, no issuing chain)
-- weak-crypto       weak keys, deprecated signature hashes, weak accepted
-                    ciphers, or key exchange without forward secrecy
+- weak-crypto       deprecated signature hashes, weak accepted TLS ciphers,
+                    key exchange without forward secrecy, or deprecated SSH
+                    KEX/cipher/MAC/host-key algorithms still on offer
+- weak-key          undersized or deprecated public keys, and ROCA-fingerprint
+                    matches (written by enrich.keyposture, which also files
+                    the ROCA CVE into `vulns`)
 """
 from __future__ import annotations
 
@@ -196,9 +200,38 @@ def _tls_matrix_findings(row: ServiceRow, now: datetime) -> list[Finding]:
     return out
 
 
+def _ssh_algorithm_findings(row: ServiceRow, now: datetime) -> list[Finding]:
+    """Deprecated algorithms in the server's SSH_MSG_KEXINIT offer.
+
+    This is where weak SSH crypto actually hides: a current OpenSSH version
+    string tells you nothing about whether hmac-md5 is still on the menu.
+    """
+    if row.service != "ssh":
+        return []
+    weak = row.raw.get("weak_algorithms")
+    if not isinstance(weak, list):
+        return []
+    out: list[Finding] = []
+    for entry in weak:
+        if not isinstance(entry, dict):
+            continue
+        algorithm = entry.get("algorithm")
+        reason = entry.get("reason")
+        severity = entry.get("severity") or "low"
+        if severity not in SEVERITY_ORDER or not algorithm:
+            continue
+        out.append(Finding(
+            "weak-crypto", severity,
+            f"SSH offers deprecated {entry.get('category', 'algorithm')} "
+            f"{algorithm} ({reason}).",
+            {"category": entry.get("category"), "algorithm": algorithm},
+        ))
+    return out
+
+
 _DETECTORS = (
     _cleartext_admin, _no_tls, _unauth_service, _tls_findings,
-    _chain_findings, _tls_matrix_findings,
+    _chain_findings, _tls_matrix_findings, _ssh_algorithm_findings,
 )
 
 

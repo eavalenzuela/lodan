@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from lodan.probes.base import ProbeResult
+from lodan.probes.ssh_kex import KexInit, audit, fetch_kexinit
 
 _DEFAULT_SSH_PORTS = frozenset({22, 2022, 2222})
 _BANNER_RE = re.compile(
@@ -43,10 +44,15 @@ class SSHProbe:
     name = "ssh"
     default_ports = _DEFAULT_SSH_PORTS
 
+    #: Read the server's volunteered SSH_MSG_KEXINIT. One extra connection and
+    #: a protocol-mandatory ident line; stops before key exchange begins.
+    do_kexinit: bool = True
+
     async def probe(self, ip: str, port: int, timeout: float) -> ProbeResult:
         banner = await asyncio.wait_for(fetch_banner(ip, port), timeout=timeout)
         host_keys = await _safe_host_keys(ip, port, timeout)
-        return parse(banner, host_keys)
+        kex = await fetch_kexinit(ip, port, timeout) if self.do_kexinit else None
+        return parse(banner, host_keys, kex)
 
 
 async def fetch_banner(ip: str, port: int) -> str:
@@ -82,15 +88,21 @@ async def _safe_host_keys(ip: str, port: int, timeout: float) -> list[tuple[str,
     return _fingerprint_keys(keys)
 
 
-def _fingerprint_keys(keys: Any) -> list[tuple[str, str]]:
+def _fingerprint_keys(keys: Any) -> list[tuple[str, str, str]]:
     """Turn asyncssh SSHKey objects (or an iterable of them) into
-    [(algo, sha256_fp)] pairs. Accepts None / single / iterable for
-    forward-compatibility with asyncssh API changes."""
+    (algo, sha256_fp, blob_hex) triples. Accepts None / single / iterable for
+    forward-compatibility with asyncssh API changes.
+
+    The wire-format blob is retained alongside the fingerprint because the
+    fingerprint is a one-way hash — offline key-strength analysis (modulus
+    size, the ROCA test) needs the actual public parameters, and re-fetching
+    them later would mean a second connection.
+    """
     if keys is None:
         return []
     if hasattr(keys, "algorithm"):  # single key
         keys = [keys]
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for k in keys:
         algo = getattr(k, "algorithm", "unknown")
         if isinstance(algo, bytes):
@@ -101,7 +113,7 @@ def _fingerprint_keys(keys: Any) -> list[tuple[str, str]]:
         except Exception:
             continue
         fp = hashlib.sha256(raw_bytes).hexdigest()
-        out.append((algo, fp))
+        out.append((algo, fp, raw_bytes.hex()))
     return out
 
 
@@ -113,8 +125,12 @@ def _b64decode(value: bytes | str) -> bytes:
     return base64.b64decode(value + b"=" * (-len(value) % 4))
 
 
-def parse(banner_line: str, host_keys: list[tuple[str, str]] | None = None) -> ProbeResult:
-    host_keys = host_keys or []
+def parse(
+    banner_line: str,
+    host_keys: list[tuple[str, str, str]] | None = None,
+    kex: KexInit | None = None,
+) -> ProbeResult:
+    host_keys = [_as_triple(k) for k in (host_keys or [])]
     parsed = parse_banner(banner_line)
     banner_parts: list[str] = [banner_line.strip() or "(no banner)"]
     if host_keys:
@@ -122,8 +138,20 @@ def parse(banner_line: str, host_keys: list[tuple[str, str]] | None = None) -> P
     raw: dict[str, Any] = {
         "banner": banner_line,
         "parsed": parsed.__dict__ if parsed else None,
-        "host_keys": [{"algo": a, "sha256": fp} for a, fp in host_keys],
+        "host_keys": [
+            {"algo": a, "sha256": fp, "blob": blob} for a, fp, blob in host_keys
+        ],
     }
+    if kex is not None:
+        raw["kexinit"] = kex.as_dict()
+        weak = audit(kex)
+        if weak:
+            raw["weak_algorithms"] = [
+                {"category": w.category, "algorithm": w.algorithm,
+                 "reason": w.reason, "severity": w.severity}
+                for w in weak
+            ]
+            banner_parts.append(f"{len(weak)} deprecated algo(s)")
     # The server's default host key is the pivot anchor ("all hosts presenting
     # this key" → spot rogue rebuilds). asyncssh hands back the negotiated
     # default, so the first entry is the right one to promote to a column.
@@ -134,6 +162,14 @@ def parse(banner_line: str, host_keys: list[tuple[str, str]] | None = None) -> P
         ssh_hostkey=primary_hostkey,
         raw=raw,
     )
+
+
+def _as_triple(entry: tuple[str, ...]) -> tuple[str, str, str]:
+    """Accept the pre-blob (algo, fp) pair as well as the (algo, fp, blob)
+    triple, so callers and fixtures written against the old shape keep working."""
+    if len(entry) >= 3:
+        return entry[0], entry[1], entry[2]
+    return entry[0], entry[1], ""
 
 
 def parse_banner(line: str) -> SSHBanner | None:

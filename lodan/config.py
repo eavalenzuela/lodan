@@ -57,6 +57,9 @@ class EnrichBlock(BaseModel):
     favicon: bool = True
     tech: bool = True
     device: bool = True
+    # Offline scoring of captured public keys (TLS chain + SSH host keys),
+    # including the ROCA fingerprint. Pure arithmetic; no traffic.
+    key_posture: bool = True
     keep_raw: bool = False
 
 
