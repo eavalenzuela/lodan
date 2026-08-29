@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from lodan.enrich import cve_data
 from lodan.enrich.cve_data import (
     CVERecord,
     connect,
@@ -121,6 +122,20 @@ def test_state_round_trip(tmp_path: Path) -> None:
     assert load_state(p) == {"last_modified": "2026-04-24"}
 
 
+async def _noop_sleep(_seconds: float) -> None:
+    """Stand-in for asyncio.sleep so pacing is exercised without waiting."""
+    return None
+
+
+def _recording_sleep() -> tuple[list[float], object]:
+    waited: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waited.append(seconds)
+
+    return waited, sleep
+
+
 def test_fetch_pages_paginates() -> None:
     pages = [
         {
@@ -143,7 +158,7 @@ def test_fetch_pages_paginates() -> None:
 
     async def _run() -> list[dict]:
         async with httpx.AsyncClient(transport=transport) as client:
-            return [p async for p in fetch_pages(client, {})]
+            return [p async for p in fetch_pages(client, {}, sleep=_noop_sleep)]
 
     got = asyncio.run(_run())
     assert len(got) == 2
@@ -214,3 +229,107 @@ def test_cli_update_requires_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     result = CliRunner().invoke(app, ["update"])
     assert result.exit_code == 1
     assert "--cves" in result.output
+
+
+def test_requests_after_the_first_are_paced() -> None:
+    # A full pull is ~150 pages; without pacing NVD 429s partway through and
+    # the run dies having downloaded most of nothing.
+    page = {"resultsPerPage": 2000, "totalResults": 6000, "vulnerabilities": []}
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=page))
+    waited, sleep = _recording_sleep()
+
+    async def _run() -> list[dict]:
+        async with httpx.AsyncClient(transport=transport) as client:
+            return [p async for p in fetch_pages(client, {}, sleep=sleep)]
+
+    got = asyncio.run(_run())
+    assert len(got) == 3
+    # Paced between pages, never before the first request.
+    assert waited == [cve_data.NVD_MIN_INTERVAL_S] * 2
+
+
+def test_an_api_key_pulls_faster() -> None:
+    page = {"resultsPerPage": 2000, "totalResults": 4000, "vulnerabilities": []}
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=page))
+    waited, sleep = _recording_sleep()
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            async for _ in fetch_pages(client, {}, api_key="k", sleep=sleep):
+                pass
+
+    asyncio.run(_run())
+    assert waited == [cve_data.NVD_MIN_INTERVAL_KEYED_S]
+
+
+def test_429_is_retried_not_raised() -> None:
+    page = {"resultsPerPage": 2000, "totalResults": 2000, "vulnerabilities": []}
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            return httpx.Response(429)
+        return httpx.Response(200, json=page)
+
+    waited, sleep = _recording_sleep()
+
+    async def _run() -> list[dict]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return [p async for p in fetch_pages(client, {}, sleep=sleep)]
+
+    assert len(asyncio.run(_run())) == 1
+    assert attempts["n"] == 3
+    # Exponential, since this response carried no Retry-After.
+    assert waited == [cve_data.NVD_BACKOFF_BASE_S, cve_data.NVD_BACKOFF_BASE_S * 2]
+
+
+def test_retry_after_header_wins_over_backoff() -> None:
+    page = {"resultsPerPage": 2000, "totalResults": 2000, "vulnerabilities": []}
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "42"})
+        return httpx.Response(200, json=page)
+
+    waited, sleep = _recording_sleep()
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            async for _ in fetch_pages(client, {}, sleep=sleep):
+                pass
+
+    asyncio.run(_run())
+    assert waited == [42.0]
+
+
+def test_persistent_429_names_the_api_key_remedy() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(429))
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            async for _ in fetch_pages(client, {}, sleep=_noop_sleep):
+                pass
+
+    with pytest.raises(cve_data.NVDUnavailable, match="LODAN_NVD_KEY"):
+        asyncio.run(_run())
+
+
+def test_a_404_is_not_retried() -> None:
+    # Only "later" statuses are retried; a real client error fails fast.
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(404)
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            async for _ in fetch_pages(client, {}, sleep=_noop_sleep):
+                pass
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(_run())
+    assert attempts["n"] == 1

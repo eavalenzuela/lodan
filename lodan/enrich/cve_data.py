@@ -13,10 +13,11 @@ Three layers, each testable in isolation:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
@@ -29,6 +30,21 @@ from lodan.paths import nvd_db, nvd_dir, nvd_state
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_PAGE_SIZE = 2000
+
+# NVD publishes a rate limit of 5 requests per rolling 30s window without an
+# API key, 50 with one. A full pull is ~150 pages, so sprinting at it does not
+# merely get throttled -- it gets a 429 partway through and the run dies having
+# downloaded most of nothing. Pace to just inside the published limit instead,
+# and treat a 429 as backpressure rather than an error.
+NVD_MIN_INTERVAL_S = 6.5
+NVD_MIN_INTERVAL_KEYED_S = 0.7
+NVD_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+NVD_MAX_RETRIES = 5
+NVD_BACKOFF_BASE_S = 10.0
+
+
+class NVDUnavailable(RuntimeError):
+    """NVD kept refusing after the retry budget was spent."""
 
 
 @dataclass(frozen=True)
@@ -177,24 +193,63 @@ def _best_cvss(metrics: dict[str, Any]) -> float | None:
     return None
 
 
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds from a Retry-After header, when NVD sends one in delta form."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        return None  # HTTP-date form; the caller's backoff covers it
+
+
+async def _get_page(
+    client: httpx.AsyncClient,
+    query: dict[str, Any],
+    headers: dict[str, str],
+    sleep: Callable[[float], Awaitable[None]],
+) -> dict[str, Any]:
+    """One page, retrying the statuses that mean 'later', not 'no'."""
+    for attempt in range(NVD_MAX_RETRIES):
+        response = await client.get(NVD_API_URL, params=query, headers=headers)
+        if response.status_code not in NVD_RETRY_STATUSES:
+            response.raise_for_status()
+            return response.json()
+        if attempt == NVD_MAX_RETRIES - 1:
+            break
+        await sleep(_retry_after(response) or NVD_BACKOFF_BASE_S * (2 ** attempt))
+    raise NVDUnavailable(
+        f"NVD returned {response.status_code} on {NVD_MAX_RETRIES} consecutive "
+        f"attempts for startIndex={query.get('startIndex')}. An API key raises the "
+        f"rate limit tenfold -- set LODAN_NVD_KEY (free from "
+        f"https://nvd.nist.gov/developers/request-an-api-key)."
+    )
+
+
 async def fetch_pages(
     client: httpx.AsyncClient,
     params: dict[str, Any],
     *,
     api_key: str | None = None,
     max_pages: int | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Yield NVD 2.0 API pages, following startIndex pagination."""
+    """Yield NVD 2.0 API pages, following startIndex pagination.
+
+    `sleep` is injectable so tests exercise the pacing without waiting it out.
+    """
     headers = {"apiKey": api_key} if api_key else {}
+    interval = NVD_MIN_INTERVAL_KEYED_S if api_key else NVD_MIN_INTERVAL_S
     start = 0
     page_count = 0
     while True:
         q = dict(params)
         q["startIndex"] = start
         q["resultsPerPage"] = NVD_PAGE_SIZE
-        response = await client.get(NVD_API_URL, params=q, headers=headers)
-        response.raise_for_status()
-        page = response.json()
+        if page_count:
+            await sleep(interval)  # pace every request after the first
+        page = await _get_page(client, q, headers, sleep)
         yield page
         page_count += 1
         total = page.get("totalResults", 0)
@@ -247,6 +302,7 @@ async def update(
     max_pages: int | None = None,
     progress: Callable[[UpdateStats], None] | None = None,
     api_key: str | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     _client: httpx.AsyncClient | None = None,
 ) -> UpdateStats:
     """Run one incremental NVD update.
@@ -272,7 +328,7 @@ async def update(
     client = _client or httpx.AsyncClient(timeout=60)
     try:
         async for page in fetch_pages(
-            client, params, api_key=api_key, max_pages=max_pages
+            client, params, api_key=api_key, max_pages=max_pages, sleep=sleep
         ):
             stats.pages += 1
             batch: list[CVERecord] = []
