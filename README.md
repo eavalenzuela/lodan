@@ -187,12 +187,50 @@ lodan prune home-lab --dry-run
 | `lodan query <ws> "expr"`       | run a mini-DSL query; `--json` for JSONL |
 | `lodan findings <ws>`           | exposure / misconfiguration findings; `--severity`, `--scan`, `--json` |
 | `lodan diff <ws>`               | scan-to-scan diff; `--from`/`--to` accept id / `prev` / `latest` / ISO date |
-| `lodan serve <ws>`              | FastAPI UI + management; localhost-only unless `--auth-token`; `--read-only` for a browse-only instance |
+| `lodan serve <ws>`              | FastAPI UI + management + JSON read API; localhost-only unless `--auth-token`; `--read-only` for a browse-only instance |
 | `lodan export <ws>`             | JSONL or JSON array dump; `--include`, `--scan`, `--output` |
 | `lodan report <ws>`             | self-contained report bundle (HTML + CSV + SARIF + checksummed manifest); `--scan`, `--output` |
 | `lodan prune <ws>`              | apply `[retention]` from config; `--dry-run` |
 | `lodan favicon-label <ws> <mmh3> "<label>"` | tag a favicon hash for the pivot views |
 | `lodan authz-ledger <ws>`       | show the immutable authorization ledger; `--decision`, `--scan`, `--json` |
+
+## JSON read API
+
+`lodan serve` also exposes a versioned JSON surface under `/api/v1`, for tools
+that want to *do* something with a scan rather than look at one. The HTML
+dashboard is HTMX-shaped and not consumable without scraping; this is the
+machine-readable half of the same rows.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/scans?limit=20` | recent scan ids, status, and CIDRs |
+| `GET /api/v1/host/{ip}?scan=&include=` | host enrichment, plus the requested sections |
+| `GET /api/v1/domain/{name}?scan=&include=subdomains` | what a scan resolved the name to, and what it refused to follow |
+
+`include` accepts a comma list of `services`, `vulns`, `certs`, `findings`,
+`topology`, or `all`; the default is `services,vulns`. An unknown name is a
+400 rather than an empty section, so a typo is never mistaken for no data.
+`topology` carries `nat_suspected` / `min_backend_count` / `backend_evidence`
+plus `clock_siblings` — the other addresses in the scan whose TCP-timestamp
+clock matches, which is the "these are one physical machine" signal in the
+form a graph tool can draw.
+
+Two things it deliberately does not do:
+
+- **It never writes.** Every endpoint is a SELECT. It cannot start a scan,
+  resolve a name, or add scope — that stays a deliberate operator act through
+  `lodan manage`. An integration that could widen `authorized_ranges` on
+  demand would make the allowlist decorative.
+- **It does not gate reads on scope.** A stored host row exists only because
+  the address was authorized when it was scanned, and withholding it from a
+  client that can read the DB anyway protects nothing. Instead every host
+  response carries `authorized`, answering the question a client actually has:
+  *could a future scan legitimately cover this address?* — so it can say
+  "authorize it first" rather than "no data".
+
+Service `raw` blobs and certificate DER are excluded from responses; use
+`lodan export` for those. The API is covered by `--auth-token` like every
+other route.
 
 ## Query DSL
 

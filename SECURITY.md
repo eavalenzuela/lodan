@@ -55,6 +55,24 @@ The operator identity comes from `$LODAN_OPERATOR` (useful for shared service
 accounts, cron, or a change-ticket reference); it falls back to the OS login
 name.
 
+## Programmatic clients
+
+`lodan serve` exposes a JSON read API under `/api/v1` (see the README). It is
+constrained so that connecting a tool to lodan cannot loosen anything this
+document promises:
+
+- Every endpoint is a SELECT. The API cannot start a scan, resolve a name, or
+  add a range to `authorized_ranges`. Scope stays a deliberate operator act
+  through `lodan manage` — an integration able to widen it on demand would
+  make the allowlist decorative.
+- It does not gate reads on current scope, because that would protect nothing:
+  a stored row exists only because the address was authorized when it was
+  scanned, and any client that can reach the API can read the workspace DB.
+  Each host response instead reports `authorized`, so a client can tell the
+  operator to authorize an address rather than silently showing nothing.
+- It is covered by `--auth-token` like every other route, and a non-loopback
+  bind still refuses to start without one.
+
 ## Handling scan data
 
 A workspace's `lodan.db` and `scan.log` contain reconnaissance findings about

@@ -597,6 +597,13 @@ def create_app(
     async def _sqlite_err(request: Request, exc: sqlite3.OperationalError):
         raise HTTPException(500, detail=f"db error: {exc}") from exc
 
+    # Imported here, not at module scope: api.py reads this module's row
+    # helpers, so a top-level import in either direction is circular. By the
+    # time the factory runs, both module bodies are complete.
+    from lodan.ui.api import register_api
+
+    register_api(app, workspace, _db)
+
     return app
 
 
